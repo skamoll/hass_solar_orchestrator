@@ -77,6 +77,9 @@ class EnergySnapshot:
     heater_on: bool = False
     heater_temp_c: float | None = None
     heater_power_w: float | None = None
+    heater_power_sample_time: datetime | None = None
+    heater_flow_l_min: float | None = None
+    heater_daily_water_l: float | None = None
 
     pool_on: bool = False
     pool_power_w: float | None = None
@@ -84,8 +87,12 @@ class EnergySnapshot:
     solar_sample_time: datetime | None = None
     battery_sample_time: datetime | None = None
     ev_sample_time: datetime | None = None
+    ev_at_home: bool = False
     solar_forecast_today_kwh: float | None = None
     solar_forecast_tomorrow_kwh: float | None = None
+    weather_daily_forecast: tuple[dict[str, object], ...] = ()
+    outdoor_temp_c: float | None = None
+    indoor_temp_c: float | None = None
     tariff_price_eur: float | None = None
     tariff_period: str | None = None
     critical_sensor_invalid: bool = False
@@ -164,6 +171,10 @@ class OrchestratorConfig:
     quiet_hours_enabled: bool = True
     quiet_hours_start: str = "23:00"
     quiet_hours_end: str = "07:00"
+    extra_shower_until: datetime | None = None
+    ev_nag_muted_until: datetime | None = None
+    shower_pattern_enabled: bool = True
+    load_modes: dict[str, str] | None = None
 
 
 @dataclass(slots=True)
@@ -215,6 +226,25 @@ class OrchestratorState:
     savings_last_day: str | None = None
     savings_last_month: str | None = None
     manual_total_expired: bool = False
+
+    heater_seen_active_draw: bool = False
+    heater_low_power_since: datetime | None = None
+    heater_thermostat_idle: bool = False
+    shower_flow_since: datetime | None = None
+    shower_veto_started_at: datetime | None = None
+    shower_veto_until: datetime | None = None
+    shower_temp_history: list[tuple[datetime, float]] = field(default_factory=list)
+    shower_water_history: list[tuple[datetime, float]] = field(default_factory=list)
+
+    ev_at_home_since: datetime | None = None
+    ev_nag_sent_day: str | None = None
+
+    cloud_pocket_day: str | None = None
+    cloud_pocket_used_kwh_today: float = 0.0
+    cloud_pocket_episode_started_at: datetime | None = None
+    cloud_pocket_episode_kwh: float = 0.0
+    cloud_pocket_last_tick: datetime | None = None
+    climate_advice_active: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -302,3 +332,13 @@ class DispatchPlan:
     estimated_savings_month_eur: float | None = None
     savings_formula: str = ""
     freshness_by_source: dict[str, int | None] = field(default_factory=dict)
+    heater_thermostat_idle: bool = False
+    shower_veto_active: bool = False
+    shower_veto_until: datetime | None = None
+    extra_shower_active: bool = False
+    byd_unplugged_surplus_alert: bool = False
+    storm_alert: bool = False
+    climate_advice: str | None = None
+    cloud_pocket_used_kwh_today: float = 0.0
+    cloud_pocket_episode_kwh: float = 0.0
+    load_modes: dict[str, str] = field(default_factory=dict)

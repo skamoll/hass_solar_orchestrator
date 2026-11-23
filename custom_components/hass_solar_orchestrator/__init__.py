@@ -84,6 +84,18 @@ def _register_services(hass: HomeAssistant) -> None:
         if coord := _first_coordinator(hass):
             await coord.async_clear_quarantine(str(call.data["load_id"]))
 
+    async def handle_set_load_mode(call: ServiceCall) -> None:
+        if coord := _first_coordinator(hass):
+            await coord.async_set_load_mode(str(call.data["load_id"]), str(call.data["mode"]))
+
+    async def handle_extra_shower_today(_call: ServiceCall) -> None:
+        if coord := _first_coordinator(hass):
+            await coord.async_trigger_extra_shower()
+
+    async def handle_mute_ev_nag_today(_call: ServiceCall) -> None:
+        if coord := _first_coordinator(hass):
+            await coord.async_mute_ev_nag_today()
+
     hass.services.async_register(
         DOMAIN,
         "set_mode",
@@ -162,6 +174,29 @@ def _register_services(hass: HomeAssistant) -> None:
         "clear_quarantine",
         handle_clear_quarantine,
         schema=vol.Schema({vol.Required("load_id"): cv.string}),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "set_load_mode",
+        handle_set_load_mode,
+        schema=vol.Schema(
+            {
+                vol.Required("load_id"): cv.string,
+                vol.Required("mode"): cv.string,
+            }
+        ),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "extra_shower_today",
+        handle_extra_shower_today,
+        schema=vol.Schema({}),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "mute_ev_nag_today",
+        handle_mute_ev_nag_today,
+        schema=vol.Schema({}),
     )
     hass.data[f"{DOMAIN}_services_registered"] = True
 

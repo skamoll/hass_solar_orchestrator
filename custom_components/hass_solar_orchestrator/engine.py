@@ -8,8 +8,21 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 
 from .const import (
+    CLOUD_POCKET_DAILY_MAX_KWH,
+    CLOUD_POCKET_EPISODE_MAX_KWH,
+    CLOUD_POCKET_EPISODE_MAX_SECONDS,
     DEFAULT_BATTERY_DISCHARGE_SHED_W,
     FORBIDDEN_ENTITY_PATTERNS,
+    HEATER_IDLE_ACTIVE_MIN_W,
+    HEATER_IDLE_EXIT_W,
+    HEATER_IDLE_HOLD_SECONDS,
+    HEATER_IDLE_THRESHOLD_W,
+    SHOWER_DELTA_L_60S,
+    SHOWER_DELTA_T_C,
+    SHOWER_FLOW_HOLD_SECONDS,
+    SHOWER_FLOW_THRESHOLD_L_MIN,
+    SHOWER_VETO_COOLDOWN_MINUTES,
+    SHOWER_VETO_MAX_MINUTES,
     GlobalTrafficLight,
     OperatingMode,
     ProfileName,
@@ -30,6 +43,7 @@ from .models import (
 TRYDAN_MODE_MODULATED = 2  # FV + Minima Potencia
 TRYDAN_MODE_SOLAR_ONLY = 3  # FV Exclusivo (autonomous safe fallback)
 _FORBIDDEN_REGEXES = tuple(re.compile(p, re.IGNORECASE) for p in FORBIDDEN_ENTITY_PATTERNS)
+_BAD_WEATHER_CONDITIONS = frozenset({"rainy", "pouring", "lightning-rainy", "snowy"})
 
 
 class SecurityDenylistViolation(Exception):
@@ -71,9 +85,13 @@ def compute_usable_surplus_w(snapshot: EnergySnapshot, config: OrchestratorConfi
     return export_w + battery_charge_reclaim_w + slack_w
 
 
-def _effective_heater_draw_w(snapshot: EnergySnapshot, config: OrchestratorConfig) -> float:
-    """Use measured heater power when available so thermostat-off (0W) is not double-counted."""
-    if not snapshot.heater_on:
+def _effective_heater_draw_w(
+    snapshot: EnergySnapshot,
+    config: OrchestratorConfig,
+    state: OrchestratorState,
+) -> float:
+    """Use measured heater power and release reserve when thermostat is idle."""
+    if not snapshot.heater_on or state.heater_thermostat_idle:
         return 0.0
     if snapshot.heater_power_w is not None:
         return max(0.0, snapshot.heater_power_w)
@@ -101,7 +119,7 @@ def _sample_age_s(now: datetime, sample_time: datetime | None) -> int | None:
 
 
 def _rollover_pool_daily(snapshot: EnergySnapshot, state: OrchestratorState) -> None:
-    """Accumulate daily pool runtime and reset counters at local midnight."""
+    """Accumulate real pool runtime (>150 W if measured) and reset at local midnight."""
     day_key = snapshot.now.date().isoformat()
     if state.pool_last_day is None:
         state.pool_last_day = day_key
@@ -111,11 +129,181 @@ def _rollover_pool_daily(snapshot: EnergySnapshot, state: OrchestratorState) -> 
         state.pool_manual_blocked_today = False
         state.pool_cooldown_until = None
 
-    if snapshot.pool_on and state.pool_last_tick is not None:
+    pool_actually_drawing = snapshot.pool_on and (
+        snapshot.pool_power_w is None or snapshot.pool_power_w > 150.0
+    )
+    if pool_actually_drawing and state.pool_last_tick is not None:
         dt_min = max(0.0, (snapshot.now - state.pool_last_tick).total_seconds() / 60.0)
         if dt_min <= 5.0:
             state.pool_minutes_today += dt_min
     state.pool_last_tick = snapshot.now
+
+
+def _update_heater_thermostat_idle(
+    snapshot: EnergySnapshot,
+    state: OrchestratorState,
+) -> None:
+    """Detect mechanical thermostat cut (<100 W fresh after >800 W) without false 0W."""
+    if not snapshot.heater_on:
+        state.heater_seen_active_draw = False
+        state.heater_low_power_since = None
+        state.heater_thermostat_idle = False
+        return
+
+    # Never coerce unavailable/None or stale power (>120 s) to 0 W!
+    if snapshot.heater_power_w is None:
+        state.heater_low_power_since = None
+        state.heater_thermostat_idle = False
+        return
+    if snapshot.heater_power_sample_time is not None:
+        age_s = (snapshot.now - snapshot.heater_power_sample_time).total_seconds()
+        if age_s > 120.0 or age_s < 0.0:
+            state.heater_low_power_since = None
+            state.heater_thermostat_idle = False
+            return
+
+    pwr = snapshot.heater_power_w
+    if pwr >= HEATER_IDLE_ACTIVE_MIN_W:
+        state.heater_seen_active_draw = True
+
+    if state.heater_thermostat_idle and pwr > HEATER_IDLE_EXIT_W:
+        state.heater_thermostat_idle = False
+        state.heater_low_power_since = None
+        return
+
+    if state.heater_seen_active_draw and pwr < HEATER_IDLE_THRESHOLD_W:
+        if state.heater_low_power_since is None:
+            state.heater_low_power_since = snapshot.now
+        elif (
+            snapshot.now - state.heater_low_power_since
+        ).total_seconds() >= HEATER_IDLE_HOLD_SECONDS:
+            state.heater_thermostat_idle = True
+    else:
+        state.heater_low_power_since = None
+
+
+def _update_shower_pattern(
+    snapshot: EnergySnapshot,
+    config: OrchestratorConfig,
+    state: OrchestratorState,
+    reasons: list[str],
+) -> bool:
+    """Detect active shower via flow, rapid water delta, or abrupt ΔT drop (V3-M02)."""
+    now = snapshot.now
+    if not config.shower_pattern_enabled:
+        return False
+
+    # Clear veto if max 90 min hard cap or cooldown elapsed
+    if state.shower_veto_until is not None and now >= state.shower_veto_until:
+        state.shower_veto_until = None
+        state.shower_veto_started_at = None
+
+    triggered = False
+    if (
+        snapshot.heater_flow_l_min is not None
+        and snapshot.heater_flow_l_min >= SHOWER_FLOW_THRESHOLD_L_MIN
+    ):
+        if state.shower_flow_since is None:
+            state.shower_flow_since = now
+        elif (now - state.shower_flow_since).total_seconds() >= SHOWER_FLOW_HOLD_SECONDS:
+            triggered = True
+            reasons.append("shower_pattern_flow")
+    else:
+        state.shower_flow_since = None
+
+    # Volume delta >= 2 L in 60 s (discarding counter resets)
+    if snapshot.heater_daily_water_l is not None:
+        cutoff_v = now - timedelta(seconds=60)
+        state.shower_water_history = [
+            (ts, val) for ts, val in state.shower_water_history if ts >= cutoff_v
+        ]
+        state.shower_water_history.append((now, snapshot.heater_daily_water_l))
+        if len(state.shower_water_history) >= 2:
+            oldest_v = state.shower_water_history[0][1]
+            delta_v = snapshot.heater_daily_water_l - oldest_v
+            if delta_v >= SHOWER_DELTA_L_60S:
+                triggered = True
+                reasons.append("shower_pattern_volume_spike")
+
+    # Abrupt temperature drop <= -1.5 °C in 10 min
+    if snapshot.heater_temp_c is not None:
+        cutoff_t = now - timedelta(minutes=10)
+        state.shower_temp_history = [
+            (ts, val) for ts, val in state.shower_temp_history if ts >= cutoff_t
+        ]
+        state.shower_temp_history.append((now, snapshot.heater_temp_c))
+        if len(state.shower_temp_history) >= 2:
+            max_recent_t = max(val for _, val in state.shower_temp_history)
+            if (snapshot.heater_temp_c - max_recent_t) <= SHOWER_DELTA_T_C:
+                triggered = True
+                reasons.append("shower_pattern_temp_drop")
+
+    if triggered:
+        if state.shower_veto_started_at is None:
+            state.shower_veto_started_at = now
+        hard_cap = state.shower_veto_started_at + timedelta(minutes=SHOWER_VETO_MAX_MINUTES)
+        if now < hard_cap:
+            candidate_until = now + timedelta(minutes=SHOWER_VETO_COOLDOWN_MINUTES)
+            state.shower_veto_until = min(candidate_until, hard_cap)
+
+    return state.shower_veto_until is not None and now < state.shower_veto_until
+
+
+def _update_cloud_pocket_metrics(
+    snapshot: EnergySnapshot,
+    state: OrchestratorState,
+) -> None:
+    """Track passive cloud-bridging budget in metrics/observing only (V3-C3)."""
+    day_key = snapshot.now.date().isoformat()
+    if state.cloud_pocket_day != day_key:
+        state.cloud_pocket_day = day_key
+        state.cloud_pocket_used_kwh_today = 0.0
+        state.cloud_pocket_episode_kwh = 0.0
+        state.cloud_pocket_episode_started_at = None
+
+    bat_discharge_w = max(0.0, snapshot.battery_power_w or 0.0)
+    if bat_discharge_w > 50.0 and state.cloud_pocket_last_tick is not None:
+        dt_s = max(0.0, (snapshot.now - state.cloud_pocket_last_tick).total_seconds())
+        if dt_s <= 120.0:
+            if state.cloud_pocket_episode_started_at is None:
+                state.cloud_pocket_episode_started_at = snapshot.now
+            ep_elapsed = (snapshot.now - state.cloud_pocket_episode_started_at).total_seconds()
+            delta_kwh = (bat_discharge_w / 1000.0) * (dt_s / 3600.0)
+            if (
+                ep_elapsed <= CLOUD_POCKET_EPISODE_MAX_SECONDS
+                and state.cloud_pocket_episode_kwh < CLOUD_POCKET_EPISODE_MAX_KWH
+                and state.cloud_pocket_used_kwh_today < CLOUD_POCKET_DAILY_MAX_KWH
+            ):
+                state.cloud_pocket_episode_kwh = round(
+                    state.cloud_pocket_episode_kwh + delta_kwh, 4
+                )
+                state.cloud_pocket_used_kwh_today = round(
+                    state.cloud_pocket_used_kwh_today + delta_kwh, 4
+                )
+    else:
+        state.cloud_pocket_episode_started_at = None
+        state.cloud_pocket_episode_kwh = 0.0
+    state.cloud_pocket_last_tick = snapshot.now
+
+
+def _evaluate_storm_alert(snapshot: EnergySnapshot) -> bool:
+    """Return True if >= 2 of the next 3 forecast days are rainy/stormy/heavily cloudy."""
+    if not snapshot.weather_daily_forecast:
+        return False
+    bad_days = 0
+    for day in snapshot.weather_daily_forecast[:3]:
+        cond = str(day.get("condition", "")).lower()
+        cloud = day.get("cloud_coverage")
+        precip = day.get("precipitation_probability")
+        if cond in _BAD_WEATHER_CONDITIONS or (
+            cond == "cloudy"
+            and (
+                (isinstance(cloud, (int, float)) and cloud >= 80)
+                or (isinstance(precip, (int, float)) and precip >= 60)
+            )
+        ):
+            bad_days += 1
+    return bad_days >= 2
 
 
 def _effective_tariff_price(snapshot: EnergySnapshot, config: OrchestratorConfig) -> float | None:
@@ -132,7 +320,6 @@ def _effective_tariff_price(snapshot: EnergySnapshot, config: OrchestratorConfig
         if (10 <= hour < 14) or (18 <= hour < 22):
             return config.tariff_p1_eur
         return config.tariff_p2_eur
-    # Conservative fallback when price sensor is missing
     return config.tariff_p1_eur
 
 
@@ -296,18 +483,23 @@ def evaluate(
     """Evaluate one telemetry tick and return (DispatchPlan, next OrchestratorState)."""
     state = replace(prev_state)
     _rollover_pool_daily(snapshot, state)
+    _update_heater_thermostat_idle(snapshot, state)
+    _update_cloud_pocket_metrics(snapshot, state)
     reasons: list[str] = []
     actions: list[LoadAction] = []
     simulated_actions: list[LoadAction] = []
     alerts: list[AlertItem] = []
 
-    # 0. Expire settling reservation when timer elapses
+    shower_veto_active = _update_shower_pattern(snapshot, config, state, reasons)
+    extra_shower_active = (
+        config.extra_shower_until is not None and snapshot.now < config.extra_shower_until
+    )
+
     if state.settling_until is not None and snapshot.now >= state.settling_until:
         state.settling_until = None
         state.virtual_reserved_w = 0.0
     settling_rem_s = _remaining_seconds(snapshot.now, state.settling_until)
 
-    # 0b. Expire Manual total -> ALWAYS return to OBSERVING (D1)
     effective_mode = config.mode
     state.manual_total_expired = False
     if config.mode == OperatingMode.MANUAL_TOTAL:
@@ -329,7 +521,6 @@ def evaluate(
         else:
             reasons.append("mode_manual_total")
 
-    # 0c. BOOT_GRACE (only when started_at is tracked by HA coordinator)
     in_boot_grace = False
     if state.started_at is not None and config.boot_grace_seconds > 0:
         elapsed_boot = (snapshot.now - state.started_at).total_seconds()
@@ -352,14 +543,12 @@ def evaluate(
         and (snapshot.now - state.degraded_since).total_seconds() >= 60.0
     )
 
-    # 0d. Virtual power reservation subtracted from usable surplus & ICP headroom (R10)
     raw_surplus_w = compute_usable_surplus_w(snapshot, config)
     usable_surplus_w = raw_surplus_w - max(0.0, state.virtual_reserved_w)
     voltage_v = compute_voltage(snapshot, config)
     ev_budget_w = usable_surplus_w + (snapshot.ev_power_w if snapshot.ev_charging else 0.0)
     icp_headroom_w, icp_ratio_pct = _compute_icp(snapshot, config, state.virtual_reserved_w)
 
-    # Track confirmed handoff state
     handoff_active = False
     if state.handoff_waiting_for_off is not None:
         target_is_off = (state.handoff_waiting_for_off == "pool" and not snapshot.pool_on) or (
@@ -386,13 +575,25 @@ def evaluate(
     rec_heater_on = snapshot.heater_on
     rec_pool_on = snapshot.pool_on
 
-    is_passive_mode = (
+    is_global_passive = (
         effective_mode in (OperatingMode.OBSERVING, OperatingMode.MANUAL_TOTAL) or in_boot_grace
     )
 
+    def _target_group(target: str) -> str:
+        if target.startswith("ev"):
+            return "ev"
+        return target
+
+    def _is_load_active(target: str) -> bool:
+        if is_global_passive:
+            return False
+        if config.load_modes is None:
+            return True
+        return config.load_modes.get(_target_group(target), "observing") == "active"
+
     def _emit(act: LoadAction, nominal_delta_w: float = 0.0) -> None:
         simulated_actions.append(act)
-        if not is_passive_mode:
+        if _is_load_active(act.target):
             actions.append(act)
             if nominal_delta_w > 0.0 and config.settling_lock_seconds > 0:
                 state.settling_until = snapshot.now + timedelta(
@@ -440,13 +641,13 @@ def evaluate(
                 )
             )
 
-    def _shed_solar_aux(reason: str) -> None:
+    def _shed_solar_aux(reason: str, *, force_safety: bool = False) -> None:
         nonlocal rec_heater_on, rec_pool_on
         if (
             snapshot.pool_on
             and state.pool_solar_owned
             and not _is_protected("pool")
-            and _cycle_lock_remaining("pool") == 0
+            and (force_safety or _cycle_lock_remaining("pool") == 0)
         ):
             rec_pool_on = False
             state.pool_solar_owned = False
@@ -457,11 +658,12 @@ def evaluate(
             state.handoff_waiting_for_off = "pool"
             state.handoff_off_confirmed_at = None
             _emit(LoadAction(target="pool", action="turn_off", reason=reason))
+        # V3-M02: shower_veto blocks optimization turn_off, NEVER electrical safety cuts
         if (
             snapshot.heater_on
             and state.heater_solar_owned
             and not _is_protected("heater")
-            and _cycle_lock_remaining("heater") == 0
+            and (force_safety or (not shower_veto_active and _cycle_lock_remaining("heater") == 0))
         ):
             rec_heater_on = False
             state.heater_solar_owned = False
@@ -470,7 +672,6 @@ def evaluate(
             state.handoff_off_confirmed_at = None
             _emit(LoadAction(target="heater", action="turn_off", reason=reason))
 
-    # Determine safety state
     if effective_mode == OperatingMode.MANUAL_TOTAL:
         safety_state = SafetyState.MANUAL_TOTAL
     elif in_boot_grace:
@@ -484,7 +685,6 @@ def evaluate(
     else:
         safety_state = SafetyState.NORMAL
 
-    # ICP critical check (M01 + M05: modulate EV down if headroom < 0)
     icp_low = icp_headroom_w is not None and icp_headroom_w < 0.0
     if icp_low:
         alerts.append(
@@ -501,7 +701,6 @@ def evaluate(
             )
         )
 
-    # Mode-specific evaluation (skipped into read-only if MANUAL_TOTAL)
     if effective_mode == OperatingMode.MANUAL_TOTAL:
         reasons.append("manual_total_active_zero_commands")
     elif effective_mode == OperatingMode.PAUSED:
@@ -529,7 +728,7 @@ def evaluate(
             snapshot.grid_power_w is not None
             and snapshot.grid_power_w > config.import_shed_threshold_w
         ):
-            _shed_solar_aux("degraded_grid_import")
+            _shed_solar_aux("degraded_grid_import", force_safety=True)
             reasons.append("degraded_shed_aux")
     elif effective_mode == OperatingMode.FORCE_EV:
         reasons.append("mode_force_ev")
@@ -564,7 +763,6 @@ def evaluate(
                     nominal_delta_w=max(0.0, (max_allowed - snapshot.ev_min_amps_a) * voltage_v),
                 )
     else:
-        # Normal solar / modulated / observing evaluation
         ev_wants_solar = (
             snapshot.ev_connected
             and not _is_blocked("ev")
@@ -575,6 +773,7 @@ def evaluate(
             ev_wants_solar
             and snapshot.ev_charging
             and snapshot.ev_power_w < (config.ev_max_amps * voltage_v * 0.92)
+            and usable_surplus_w < config.heater_start_export_w
         )
 
         if effective_mode in (OperatingMode.AUTO_SOLAR, OperatingMode.OBSERVING):
@@ -735,10 +934,14 @@ def evaluate(
                 else:
                     state.ev_step_up_since = None
 
-        # Auxiliary Load 1: Water Heater (Termo)
+        # Auxiliary Load 1: Water Heater (1054 W real + shower veto M02 + extra shower M03)
+        target_heater_temp = (
+            config.heater_target_temp_c + 5.0
+            if extra_shower_active
+            else config.heater_target_temp_c
+        )
         heater_temp_ok = (
-            snapshot.heater_temp_c is not None
-            and snapshot.heater_temp_c >= config.heater_target_temp_c
+            snapshot.heater_temp_c is not None and snapshot.heater_temp_c >= target_heater_temp
         )
         heater_ext_paused = (
             state.heater_external_override_until is not None
@@ -746,11 +949,12 @@ def evaluate(
         )
         if not _is_blocked("heater") and not state.heater_quarantined and not heater_ext_paused:
             if snapshot.heater_on and state.heater_solar_owned:
-                if (
-                    heater_temp_ok
-                    and _cycle_lock_remaining("heater") == 0
+                can_turn_off_opt = (
+                    not shower_veto_active
                     and not _is_protected("heater")
-                ):
+                    and _cycle_lock_remaining("heater") == 0
+                )
+                if heater_temp_ok and can_turn_off_opt:
                     rec_heater_on = False
                     state.heater_solar_owned = False
                     state.heater_last_changed_at = snapshot.now
@@ -760,11 +964,7 @@ def evaluate(
                         LoadAction(target="heater", action="turn_off", reason="heater_target_temp")
                     )
                     reasons.append("heater_reached_target_temp")
-                elif (
-                    ev_absorbing_all
-                    and _cycle_lock_remaining("heater") == 0
-                    and not _is_protected("heater")
-                ):
+                elif ev_absorbing_all and can_turn_off_opt:
                     rec_heater_on = False
                     state.heater_solar_owned = False
                     state.heater_last_changed_at = snapshot.now
@@ -805,7 +1005,7 @@ def evaluate(
             else:
                 state.heater_export_since = None
 
-        # Auxiliary Load 2: Pool Pump (Depuradora)
+        # Auxiliary Load 2: Pool Pump (250 W concurrent-capable M06 + M07)
         pool_cooldown_active = (
             state.pool_cooldown_until is not None and snapshot.now < state.pool_cooldown_until
         )
@@ -815,6 +1015,9 @@ def evaluate(
         pool_ext_paused = (
             state.pool_external_override_until is not None
             and snapshot.now < state.pool_external_override_until
+        )
+        heater_pending_new_draw = (
+            config.heater_nominal_w if (rec_heater_on and not snapshot.heater_on) else 0.0
         )
 
         if not _is_blocked("pool") and not state.pool_quarantined and not pool_ext_paused:
@@ -830,7 +1033,7 @@ def evaluate(
                     and not _is_protected("pool")
                     and _cycle_lock_remaining("pool") == 0
                 ):
-                    if ev_wants_solar and snapshot.ev_charging:
+                    if ev_wants_solar and snapshot.ev_charging and usable_surplus_w < 2600.0:
                         rec_pool_on = False
                         state.pool_solar_owned = False
                         state.pool_last_changed_at = snapshot.now
@@ -843,21 +1046,6 @@ def evaluate(
                             LoadAction(target="pool", action="turn_off", reason="pool_yield_to_ev")
                         )
                         reasons.append("pool_yielded_to_ev")
-                    elif rec_heater_on:
-                        rec_pool_on = False
-                        state.pool_solar_owned = False
-                        state.pool_last_changed_at = snapshot.now
-                        state.pool_cooldown_until = snapshot.now + timedelta(
-                            minutes=config.pool_cooldown_minutes
-                        )
-                        state.handoff_waiting_for_off = "pool"
-                        state.handoff_off_confirmed_at = None
-                        _emit(
-                            LoadAction(
-                                target="pool", action="turn_off", reason="pool_yield_to_heater"
-                            )
-                        )
-                        reasons.append("pool_yielded_to_heater")
                     elif (
                         grid_import_w > 400.0 or bat_discharge_w > DEFAULT_BATTERY_DISCHARGE_SHED_W
                     ):
@@ -884,15 +1072,17 @@ def evaluate(
                         state.aux_shed_since = None
             else:
                 state.aux_shed_since = None
-                export_w = -(snapshot.grid_power_w or 0.0) - max(0.0, state.virtual_reserved_w)
+                export_w = (
+                    -(snapshot.grid_power_w or 0.0)
+                    - max(0.0, state.virtual_reserved_w)
+                    - heater_pending_new_draw
+                )
+                # M06 concurrent: pool (250 W) shares surplus if remaining export >= threshold
                 can_start_pool = (
                     config.pool_enabled
                     and not state.pool_manual_blocked_today
                     and not pool_cooldown_active
                     and not pool_quota_exhausted
-                    and not snapshot.ev_charging
-                    and not rec_heater_on
-                    and (not config.heater_enabled or heater_temp_ok)
                     and bat_discharge_w < config.battery_discharge_shed_w
                     and not handoff_active
                     and settling_rem_s == 0
@@ -918,7 +1108,61 @@ def evaluate(
                 else:
                     state.pool_export_since = None
 
-    # Traffic light
+    # BYD in home with sun & unplugged alert (V3-M04)
+    if snapshot.ev_at_home:
+        if state.ev_at_home_since is None:
+            state.ev_at_home_since = snapshot.now
+    else:
+        state.ev_at_home_since = None
+
+    day_key = snapshot.now.date().isoformat()
+    nag_muted = (
+        config.ev_nag_muted_until is not None and snapshot.now < config.ev_nag_muted_until
+    ) or (state.ev_nag_sent_day == day_key)
+    byd_unplugged_alert = (
+        snapshot.ev_at_home
+        and state.ev_at_home_since is not None
+        and (snapshot.now - state.ev_at_home_since).total_seconds() >= 600.0
+        and not snapshot.ev_connected
+        and not degraded
+        and usable_surplus_w >= 1400.0
+        and snapshot.ev_soc is not None
+        and snapshot.ev_soc < 85.0
+        and not nag_muted
+    )
+    if byd_unplugged_alert:
+        alerts.append(
+            AlertItem(
+                alert_id="byd_unplugged_surplus",
+                severity="info",
+                title="Enchufa el BYD para aprovechar el excedente",
+                detail=(
+                    f"Coche en casa con {snapshot.ev_soc:.0f}% SoC y "
+                    f"{round(usable_surplus_w)} W de sol sin usar."
+                ),
+                target="ev",
+                bypass_quiet_hours=False,
+            )
+        )
+
+    # Storm alert (V3-M05) & climate advice (V3-M08)
+    storm_alert = _evaluate_storm_alert(snapshot)
+    if usable_surplus_w >= 800.0 and not degraded:
+        state.climate_advice_active = True
+    elif usable_surplus_w < 500.0 or degraded:
+        state.climate_advice_active = False
+
+    climate_advice: str | None = None
+    if (
+        state.climate_advice_active
+        and snapshot.outdoor_temp_c is not None
+        and (snapshot.outdoor_temp_c > 26.0 or snapshot.outdoor_temp_c < 15.0)
+    ):
+        climate_advice = (
+            f"Buen momento para climatizar comedor ({round(usable_surplus_w)} W solares, "
+            f"ext {snapshot.outdoor_temp_c:.1f}°C)"
+        )
+
     if effective_mode == OperatingMode.MANUAL_TOTAL:
         traffic_light = GlobalTrafficLight.MANUAL
     elif effective_mode == OperatingMode.OBSERVING:
@@ -930,7 +1174,6 @@ def evaluate(
     else:
         traffic_light = GlobalTrafficLight.OPTIMAL
 
-    # Honest savings & advisory outputs
     savings_today, savings_month, savings_formula = _update_savings(snapshot, config, state)
     battery_advice = _build_battery_advice(snapshot, config)
     ev_commitment = _compute_ev_commitment(snapshot, config)
@@ -946,7 +1189,6 @@ def evaluate(
             f"Buen momento para lavadora o lavavajillas ({round(usable_surplus_w)} W de excedente)"
         )
 
-    # Flex loads radar
     heater_min_on_rem = _cycle_lock_remaining("heater")
     pool_min_on_rem = _cycle_lock_remaining("pool")
     flex_loads = (
@@ -967,6 +1209,10 @@ def evaluate(
             reason=(
                 "En cuarentena por discrepancia de retorno"
                 if state.heater_quarantined
+                else "🚿 Ducha detectada / Veto activo"
+                if shower_veto_active
+                else "Reposo termostato (<100 W)"
+                if state.heater_thermostat_idle
                 else "Ciclo protegido activo"
                 if heater_min_on_rem > 0
                 else ("Calentando con excedente" if rec_heater_on else "En espera de excedente")
@@ -1011,7 +1257,7 @@ def evaluate(
         "house": "Prioridad #1 inamovible: el consumo doméstico nunca se recorta.",
         "ev": (
             "Modo Sombra: proponiendo sin actuar."
-            if effective_mode == OperatingMode.OBSERVING
+            if not _is_load_active("ev")
             else f"VE {rec_ev_amps} A (suelo batería {int(config.house_soc_floor)}%)."
         ),
         "heater": flex_loads[0].reason,
@@ -1029,7 +1275,7 @@ def evaluate(
         "ev": _sample_age_s(snapshot.now, snapshot.ev_sample_time),
     }
 
-    heater_draw = _effective_heater_draw_w(snapshot, config)
+    heater_draw = _effective_heater_draw_w(snapshot, config, state)
     mode_prefix = (
         "Observing (dry-run)" if effective_mode == OperatingMode.OBSERVING else effective_mode.value
     )
@@ -1056,6 +1302,12 @@ def evaluate(
             f"Termo {'ON' if rec_heater_on else 'OFF'} · "
             f"Depuradora {'ON' if rec_pool_on else 'OFF'}"
         )
+
+    effective_load_modes = (
+        dict(config.load_modes)
+        if config.load_modes is not None
+        else {"pool": "active", "heater": "active", "ev": "active"}
+    )
 
     return (
         DispatchPlan(
@@ -1087,6 +1339,16 @@ def evaluate(
             estimated_savings_month_eur=savings_month,
             savings_formula=savings_formula,
             freshness_by_source=freshness_by_source,
+            heater_thermostat_idle=state.heater_thermostat_idle,
+            shower_veto_active=shower_veto_active,
+            shower_veto_until=state.shower_veto_until,
+            extra_shower_active=extra_shower_active,
+            byd_unplugged_surplus_alert=byd_unplugged_alert,
+            storm_alert=storm_alert,
+            climate_advice=climate_advice,
+            cloud_pocket_used_kwh_today=state.cloud_pocket_used_kwh_today,
+            cloud_pocket_episode_kwh=state.cloud_pocket_episode_kwh,
+            load_modes=effective_load_modes,
         ),
         state,
     )

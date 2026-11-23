@@ -23,6 +23,7 @@ from .const import (
     CONF_BATTERY_SLACK_W,
     CONF_BATTERY_SOC_ENTITY,
     CONF_BOOT_GRACE_SECONDS,
+    CONF_CLIMATE_ENTITY,
     CONF_CLOUD_BATTERY_POWER_ENTITY,
     CONF_CLOUD_BATTERY_SOC_ENTITY,
     CONF_CLOUD_GRID_POWER_ENTITY,
@@ -40,8 +41,11 @@ from .const import (
     CONF_EV_SOC_ENTITY,
     CONF_EV_START_AMPS,
     CONF_EV_TARGET_SOC,
+    CONF_EV_TRACKER_ENTITY,
     CONF_EVAL_INTERVAL_SECONDS,
     CONF_GRID_POWER_ENTITY,
+    CONF_HEATER_DAILY_WATER_ENTITY,
+    CONF_HEATER_FLOW_ENTITY,
     CONF_HEATER_POWER_ENTITY,
     CONF_HEATER_START_EXPORT_W,
     CONF_HEATER_SWITCH_ENTITY,
@@ -61,6 +65,7 @@ from .const import (
     CONF_SOLAR_POWER_ENTITY,
     CONF_STALE_TIMEOUT_SECONDS,
     CONF_TARIFF_PRICE_ENTITY,
+    CONF_WEATHER_ENTITY,
     DEFAULT_BATTERY_SLACK_W,
     DEFAULT_BOOT_GRACE_SECONDS,
     DEFAULT_CONTRACTED_POWER_W,
@@ -141,6 +146,11 @@ class SolarOrchestratorCoordinator(DataUpdateCoordinator[DispatchPlan]):
         self._last_snapshot: EnergySnapshot | None = None
         self._expected_heater_on: bool | None = None
         self._expected_pool_on: bool | None = None
+        self._weather_cache: list[dict[str, Any]] = []
+        self._weather_cache_at: datetime | None = None
+        self._active_conflicts: list[dict[str, Any]] = []
+        if self.config.load_modes is None:
+            self.config.load_modes = {"pool": "observing", "heater": "observing", "ev": "observing"}
 
     def _build_config(self) -> OrchestratorConfig:
         opts = self.entry.options
@@ -253,6 +263,12 @@ class SolarOrchestratorCoordinator(DataUpdateCoordinator[DispatchPlan]):
         self.config.manual_total_until = _parse_dt(raw.get("manual_total_until"))
         self.config.ev_boost_until = _parse_dt(raw.get("ev_boost_until"))
         self.config.vacation_until = _parse_dt(raw.get("vacation_until"))
+        self.config.extra_shower_until = _parse_dt(raw.get("extra_shower_until"))
+        self.config.ev_nag_muted_until = _parse_dt(raw.get("ev_nag_muted_until"))
+        if isinstance(raw.get("load_modes"), dict):
+            self.config.load_modes = {
+                k: v for k, v in raw["load_modes"].items() if v in ("observing", "active")
+            }
 
         self.runtime_state = OrchestratorState(
             started_at=dt_util.utcnow(),
@@ -270,6 +286,8 @@ class SolarOrchestratorCoordinator(DataUpdateCoordinator[DispatchPlan]):
             savings_month_eur=float(raw.get("savings_month_eur", 0.0)),
             savings_last_day=raw.get("savings_last_day"),
             savings_last_month=raw.get("savings_last_month"),
+            shower_veto_started_at=_parse_dt(raw.get("shower_veto_started_at")),
+            shower_veto_until=_parse_dt(raw.get("shower_veto_until")),
         )
         for item in reversed(raw.get("blackbox", [])[:MAX_BLACKBOX_ENTRIES]):
             if isinstance(item, dict):
@@ -315,6 +333,27 @@ class SolarOrchestratorCoordinator(DataUpdateCoordinator[DispatchPlan]):
             ),
             "vacation_until": (
                 self.config.vacation_until.isoformat() if self.config.vacation_until else None
+            ),
+            "extra_shower_until": (
+                self.config.extra_shower_until.isoformat()
+                if self.config.extra_shower_until
+                else None
+            ),
+            "ev_nag_muted_until": (
+                self.config.ev_nag_muted_until.isoformat()
+                if self.config.ev_nag_muted_until
+                else None
+            ),
+            "load_modes": dict(self.config.load_modes or {}),
+            "shower_veto_started_at": (
+                self.runtime_state.shower_veto_started_at.isoformat()
+                if self.runtime_state.shower_veto_started_at
+                else None
+            ),
+            "shower_veto_until": (
+                self.runtime_state.shower_veto_until.isoformat()
+                if self.runtime_state.shower_veto_until
+                else None
             ),
             "heater_solar_owned": self.runtime_state.heater_solar_owned,
             "pool_solar_owned": self.runtime_state.pool_solar_owned,
@@ -415,7 +454,34 @@ class SolarOrchestratorCoordinator(DataUpdateCoordinator[DispatchPlan]):
         ev_min_raw = self._read_float(data.get(CONF_EV_MIN_CURRENT_ENTITY))
         _, ev_ts = self._read_float_w(data.get(CONF_EV_POWER_ENTITY))
         tariff_price = self._read_float(data.get(CONF_TARIFF_PRICE_ENTITY))
-        solar_forecast_tomorrow = self._read_float(data.get(CONF_SOLAR_FORECAST_ENTITY))
+        solar_forecast_tomorrow = self._read_float(
+            data.get(CONF_SOLAR_FORECAST_ENTITY) or "sensor.sem_forecast_tomorrow_kwh"
+        )
+        heater_pwr, heater_pwr_ts = self._read_float_w(data.get(CONF_HEATER_POWER_ENTITY))
+        heater_flow = self._read_float(
+            data.get(CONF_HEATER_FLOW_ENTITY)
+            or "sensor.galeria_galeria_sensor_termo_galeria_caudal_instantaneo"
+        )
+        heater_daily_water = self._read_float(
+            data.get(CONF_HEATER_DAILY_WATER_ENTITY)
+            or "sensor.galeria_galeria_sensor_termo_agua_consumo_diario"
+        )
+        tracker_id = data.get(CONF_EV_TRACKER_ENTITY) or "device_tracker.byd_atto_3_ubicacion"
+        ev_at_home = self._read_str(tracker_id).lower() == "home"
+        weather_id = data.get(CONF_WEATHER_ENTITY) or "weather.forecast_casa"
+        w_st = self.hass.states.get(weather_id)
+        outdoor_temp = (
+            float(w_st.attributes["temperature"])
+            if w_st and isinstance(w_st.attributes.get("temperature"), (int, float))
+            else None
+        )
+        climate_id = data.get(CONF_CLIMATE_ENTITY) or "climate.aire_comedor"
+        c_st = self.hass.states.get(climate_id)
+        indoor_temp = (
+            float(c_st.attributes["current_temperature"])
+            if c_st and isinstance(c_st.attributes.get("current_temperature"), (int, float))
+            else None
+        )
 
         snap = EnergySnapshot(
             now=now,
@@ -428,6 +494,7 @@ class SolarOrchestratorCoordinator(DataUpdateCoordinator[DispatchPlan]):
             solar_sample_time=solar_ts,
             battery_sample_time=bat_ts,
             ev_sample_time=ev_ts,
+            ev_at_home=ev_at_home,
             telemetry_source=source,
             ev_connected=self._read_bool(data.get(CONF_EV_CONNECTED_ENTITY)),
             ev_charging=self._read_bool(data.get(CONF_EV_CHARGING_ENTITY)),
@@ -438,11 +505,17 @@ class SolarOrchestratorCoordinator(DataUpdateCoordinator[DispatchPlan]):
             ev_soc=self._read_float(data.get(CONF_EV_SOC_ENTITY)),
             heater_on=self._read_bool(data.get(CONF_HEATER_SWITCH_ENTITY)),
             heater_temp_c=self._read_float(data.get(CONF_HEATER_TEMP_ENTITY)),
-            heater_power_w=self._read_float_w(data.get(CONF_HEATER_POWER_ENTITY))[0],
+            heater_power_w=heater_pwr,
+            heater_power_sample_time=heater_pwr_ts,
+            heater_flow_l_min=heater_flow,
+            heater_daily_water_l=heater_daily_water,
             pool_on=self._read_bool(data.get(CONF_POOL_SWITCH_ENTITY)),
             pool_power_w=self._read_float_w(data.get(CONF_POOL_POWER_ENTITY))[0],
             tariff_price_eur=tariff_price,
             solar_forecast_tomorrow_kwh=solar_forecast_tomorrow,
+            weather_daily_forecast=tuple(self._weather_cache),
+            outdoor_temp_c=outdoor_temp,
+            indoor_temp_c=indoor_temp,
             critical_sensor_invalid=critical_invalid,
         )
         self._last_snapshot = snap
@@ -463,7 +536,8 @@ class SolarOrchestratorCoordinator(DataUpdateCoordinator[DispatchPlan]):
                     target="heater",
                 )
             elif (
-                snapshot.heater_on
+                not self.runtime_state.heater_thermostat_idle
+                and snapshot.heater_on
                 and snapshot.heater_power_w is not None
                 and snapshot.heater_power_w < 20.0
                 and self.runtime_state.heater_last_changed_at is not None
@@ -537,6 +611,28 @@ class SolarOrchestratorCoordinator(DataUpdateCoordinator[DispatchPlan]):
                     self.purge_pending_actions()
                     return
                 act = self._pending_actions.popleft()
+                grp = "ev" if act.target.startswith("ev") else act.target
+                if (self.config.load_modes or {}).get(grp, "observing") != "active":
+                    self._record_blackbox(
+                        "simulated",
+                        f"[Carga en Sombra] Omitida orden real {act.target}.{act.action}",
+                        target=act.target,
+                        executed=False,
+                    )
+                    continue
+                if (
+                    act.target == "heater"
+                    and act.action == "turn_off"
+                    and self.runtime_state.shower_veto_until is not None
+                    and dt_util.utcnow() < self.runtime_state.shower_veto_until
+                ):
+                    self._record_blackbox(
+                        "shower_pattern",
+                        "Veto de ducha activo: turn_off retenido en el punto de envío",
+                        target="heater",
+                        executed=False,
+                    )
+                    continue
                 try:
                     if act.target == "heater":
                         entity_id = data.get(CONF_HEATER_SWITCH_ENTITY)
@@ -607,7 +703,33 @@ class SolarOrchestratorCoordinator(DataUpdateCoordinator[DispatchPlan]):
                         target=act.target,
                     )
 
+    async def _async_refresh_weather_cache(self) -> None:
+        """Fetch 3-5 day daily weather forecast with 30-min cache (V3-M05)."""
+        now = dt_util.utcnow()
+        if (
+            self._weather_cache_at is not None
+            and (now - self._weather_cache_at).total_seconds() < 1800.0
+        ):
+            return
+        weather_id = self.entry.data.get(CONF_WEATHER_ENTITY) or "weather.forecast_casa"
+        if not self.hass.states.get(weather_id):
+            return
+        with contextlib.suppress(Exception):
+            resp = await self.hass.services.async_call(
+                "weather",
+                "get_forecasts",
+                {"entity_id": weather_id, "type": "daily"},
+                blocking=True,
+                return_response=True,
+            )
+            fc = (resp or {}).get(weather_id, {}).get("forecast", [])
+            if isinstance(fc, list):
+                self._weather_cache = fc[:5]
+                self._weather_cache_at = now
+
     async def _async_update_data(self) -> DispatchPlan:
+        await self._async_refresh_weather_cache()
+        self._active_conflicts = self.detect_all_conflicts()
         snapshot = self._build_snapshot()
         self._check_w_return_and_external(snapshot)
         plan, next_state = evaluate(snapshot, self.config, self.runtime_state)
@@ -853,6 +975,159 @@ class SolarOrchestratorCoordinator(DataUpdateCoordinator[DispatchPlan]):
         await self.async_save_state()
         await self.async_request_refresh()
 
+    def detect_conflicts(self, load_id: str) -> list[dict[str, str]]:
+        """Detect enabled HA automations competing for the same load (V3-M10)."""
+        patterns = {
+            "heater": ("termo", "energia_solar_termo", "termo_garantia_de_ducha"),
+            "ev": ("coche_control_continuo", "trydan_alimentar_control"),
+            "pool": ("terraza_depuradora", "terraza_control_de_enchufe"),
+        }
+        keys = patterns.get(load_id, ())
+        conflicts: list[dict[str, str]] = []
+        for st in self.hass.states.async_all("automation"):
+            if st.state != "on":
+                continue
+            eid = st.entity_id.lower()
+            if any(k in eid for k in keys):
+                conflicts.append(
+                    {
+                        "load": load_id,
+                        "entity_id": st.entity_id,
+                        "alias": str(st.attributes.get("friendly_name", st.entity_id)),
+                    }
+                )
+        return conflicts
+
+    def detect_all_conflicts(self) -> list[dict[str, str]]:
+        """Return conflicts across all granular loads and auto-degrade if active."""
+        all_c: list[dict[str, str]] = []
+        for lid in ("pool", "heater", "ev"):
+            c = self.detect_conflicts(lid)
+            all_c.extend(c)
+            if c and (self.config.load_modes or {}).get(lid) == "active":
+                if self.config.load_modes is None:
+                    self.config.load_modes = {}
+                self.config.load_modes[lid] = "observing"
+                self._record_blackbox(
+                    "conflict",
+                    f"Conflicto detectado en {lid} ({c[0]['entity_id']}): vuelto a observing",
+                    target=lid,
+                )
+        return all_c
+
+    def scan_entities(self) -> dict[str, Any]:
+        """Auto-discover candidate HA entities with live validation badges (V3-M09)."""
+        role_patterns = {
+            "solar_power": ("sungrow", "solar_power", "pv_power"),
+            "grid_power": ("sungrow", "grid_power", "red"),
+            "battery_soc": ("sungrow", "battery_soc", "bateria"),
+            "ev_soc": ("byd_atto_3_nivel_de_bateria", "ev_soc"),
+            "ev_connected": ("trydan_conectado", "ev_connected"),
+            "ev_min_amps": ("trydan_intensidad_minima", "ev_min"),
+            "heater_switch": ("switch.termo_electrico",),
+            "heater_power": ("termo_electrico_energy_power", "galeria_termo_power"),
+            "heater_temp": ("temperatura_del_agua_ajustada", "termo_temp"),
+            "heater_flow": ("caudal_instantaneo",),
+            "pool_switch": ("terraza_plug_router", "depuradora"),
+            "weather": ("weather.forecast_casa", "weather."),
+            "solar_forecast": ("sem_forecast_tomorrow_kwh",),
+        }
+        all_states = self.hass.states.async_all()
+        roles: dict[str, Any] = {}
+        for role, pats in role_patterns.items():
+            matches = [st for st in all_states if any(p in st.entity_id.lower() for p in pats)]
+            if not matches:
+                roles[role] = {"status": "missing", "selected": None, "candidates": [], "live": "—"}
+                continue
+            best = matches[0]
+            valid = best.state not in ("unknown", "unavailable", "none", "")
+            status = "ok" if (valid and len(matches) == 1) else "warning"
+            unit = str(best.attributes.get("unit_of_measurement", "")).strip()
+            roles[role] = {
+                "status": status,
+                "selected": best.entity_id,
+                "candidates": [m.entity_id for m in matches[:6]],
+                "live": f"{best.state} {unit}".strip(),
+            }
+        return {"roles": roles, "conflicts": self.detect_all_conflicts()}
+
+    async def async_set_load_mode(self, load_id: str, mode: str) -> None:
+        """Set per-load observing/active mode with conflict interlock (V3-M10)."""
+        if mode not in ("observing", "active") or load_id not in ("pool", "heater", "ev"):
+            raise ServiceValidationError("Carga o modo inválido.")
+        if mode == "active":
+            conflicts = self.detect_conflicts(load_id)
+            if conflicts:
+                names = ", ".join(c["entity_id"] for c in conflicts)
+                self._record_blackbox(
+                    "conflict",
+                    f"Bloqueado paso a active para {load_id}: {names}",
+                    target=load_id,
+                )
+                raise ServiceValidationError(
+                    f"Conflicto activo en HA para {load_id}: apaga primero {names}"
+                )
+        if self.config.load_modes is None:
+            self.config.load_modes = {"pool": "observing", "heater": "observing", "ev": "observing"}
+        self.config.load_modes[load_id] = mode
+        self._record_blackbox("mode_change", f"Carga {load_id} -> {mode}", target=load_id)
+        await self.async_save_state()
+        await self.async_request_refresh()
+
+    async def async_trigger_extra_shower(self) -> None:
+        """Activate 1-touch Extra Shower demand until local midnight (V3-M03)."""
+        local_now = dt_util.now()
+        local_end = local_now.replace(hour=23, minute=59, second=59, microsecond=0)
+        self.config.extra_shower_until = dt_util.as_utc(local_end)
+        self._record_blackbox(
+            "override", "Ducha extra / Visitas activada hasta medianoche", target="heater"
+        )
+        await self.async_save_state()
+        await self.async_request_refresh()
+
+    async def async_mute_ev_nag_today(self) -> None:
+        """Mute BYD unplugged alert until local midnight (V3-M04)."""
+        local_now = dt_util.now()
+        local_end = local_now.replace(hour=23, minute=59, second=59, microsecond=0)
+        self.config.ev_nag_muted_until = dt_util.as_utc(local_end)
+        self.runtime_state.ev_nag_sent_day = dt_util.utcnow().date().isoformat()
+        self._record_blackbox("override", "Aviso BYD desenchufado silenciado hoy", target="ev")
+        await self.async_save_state()
+        await self.async_request_refresh()
+
+    def get_filtered_blackbox(
+        self,
+        *,
+        equipment: str | None = None,
+        event_type: str | None = None,
+        collapse: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Filter Blackbox and collapse consecutive identical entries (V3-M12)."""
+        items = [
+            e
+            for e in self.blackbox
+            if (not equipment or e.get("target") == equipment)
+            and (not event_type or e.get("type") == event_type)
+        ]
+        if not collapse:
+            return items
+        grouped: list[dict[str, Any]] = []
+        for entry in items:
+            if (
+                grouped
+                and grouped[-1].get("target") == entry.get("target")
+                and grouped[-1].get("type") == entry.get("type")
+                and grouped[-1].get("message") == entry.get("message")
+            ):
+                grouped[-1]["count"] = grouped[-1].get("count", 1) + 1
+                grouped[-1]["first_ts"] = entry.get("ts")
+            else:
+                copy_e = dict(entry)
+                copy_e["count"] = 1
+                copy_e["first_ts"] = entry.get("ts")
+                grouped.append(copy_e)
+        return grouped
+
     def get_panel_snapshot(self) -> dict[str, Any]:
         """Build JSON-serializable payload for the custom sidebar Web Component."""
         plan = self.data
@@ -866,6 +1141,11 @@ class SolarOrchestratorCoordinator(DataUpdateCoordinator[DispatchPlan]):
                 if self.config.manual_total_until
                 else None
             ),
+            "load_modes": dict(
+                self.config.load_modes
+                or {"pool": "observing", "heater": "observing", "ev": "observing"}
+            ),
+            "conflicts": list(self._active_conflicts),
             "snapshot": {
                 "solar_w": snap.solar_power_w if snap else None,
                 "house_w": snap.load_power_w if snap else None,
@@ -877,7 +1157,16 @@ class SolarOrchestratorCoordinator(DataUpdateCoordinator[DispatchPlan]):
                 "ev_current_a": snap.ev_current_a if snap else None,
                 "ev_connected": snap.ev_connected if snap else False,
                 "ev_charging": snap.ev_charging if snap else False,
+                "ev_at_home": snap.ev_at_home if snap else False,
+                "heater_on": snap.heater_on if snap else False,
+                "heater_temp_c": snap.heater_temp_c if snap else None,
+                "heater_power_w": snap.heater_power_w if snap else None,
+                "pool_on": snap.pool_on if snap else False,
+                "pool_power_w": snap.pool_power_w if snap else None,
+                "pool_minutes_today": round(self.runtime_state.pool_minutes_today, 1),
+                "pool_daily_max_minutes": self.config.pool_daily_max_minutes,
                 "solar_forecast_tomorrow_kwh": snap.solar_forecast_tomorrow_kwh if snap else None,
+                "weather_daily_forecast": list(snap.weather_daily_forecast) if snap else [],
                 "tariff_price_eur": snap.tariff_price_eur if snap else None,
             },
             "plan": {
@@ -896,6 +1185,18 @@ class SolarOrchestratorCoordinator(DataUpdateCoordinator[DispatchPlan]):
                 else None,
                 "washer_suggestion": plan.washer_suggestion if plan else None,
                 "battery_advice": plan.battery_advice if plan else None,
+                "heater_thermostat_idle": plan.heater_thermostat_idle if plan else False,
+                "shower_veto_active": plan.shower_veto_active if plan else False,
+                "shower_veto_until": (
+                    plan.shower_veto_until.isoformat()
+                    if (plan and plan.shower_veto_until)
+                    else None
+                ),
+                "extra_shower_active": plan.extra_shower_active if plan else False,
+                "byd_unplugged_surplus_alert": plan.byd_unplugged_surplus_alert if plan else False,
+                "storm_alert": plan.storm_alert if plan else False,
+                "climate_advice": plan.climate_advice if plan else None,
+                "cloud_pocket_used_kwh_today": plan.cloud_pocket_used_kwh_today if plan else 0.0,
                 "alerts": [asdict(a) for a in plan.alerts] if plan else [],
                 "estimated_savings_today_eur": plan.estimated_savings_today_eur if plan else None,
                 "estimated_savings_month_eur": plan.estimated_savings_month_eur if plan else None,
@@ -926,7 +1227,7 @@ class SolarOrchestratorCoordinator(DataUpdateCoordinator[DispatchPlan]):
                 "quiet_hours_end": self.config.quiet_hours_end,
                 "entities": dict(self.entry.data),
             },
-            "blackbox": list(self.blackbox)[:50],
+            "blackbox": self.get_filtered_blackbox()[:50],
         }
 
     async def async_handle_shutdown(self, _event: Event | None = None) -> None:

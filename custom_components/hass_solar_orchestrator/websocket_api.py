@@ -30,6 +30,8 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
         return
     websocket_api.async_register_command(hass, ws_get_snapshot)
     websocket_api.async_register_command(hass, ws_validate_entity)
+    websocket_api.async_register_command(hass, ws_entities_scan)
+    websocket_api.async_register_command(hass, ws_blackbox)
     hass.data[f"{DOMAIN}_ws_registered"] = True
 
 
@@ -117,3 +119,51 @@ def ws_validate_entity(
             "hint": hint,
         },
     )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/entities_scan",
+        vol.Optional("entry_id"): str,
+    }
+)
+@callback
+def ws_entities_scan(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Auto-discover candidate HA entities and active automation conflicts (V3-M09/M10)."""
+    coord = _get_coordinator(hass, msg.get("entry_id"))
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "No hay instancia configurada")
+        return
+    connection.send_result(msg["id"], coord.scan_entities())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/blackbox",
+        vol.Optional("entry_id"): str,
+        vol.Optional("equipment"): str,
+        vol.Optional("event_type"): str,
+        vol.Optional("collapse", default=True): bool,
+    }
+)
+@callback
+def ws_blackbox(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Return filtered and collapsed local Blackbox entries (V3-M12)."""
+    coord = _get_coordinator(hass, msg.get("entry_id"))
+    if coord is None:
+        connection.send_error(msg["id"], "not_found", "No hay instancia configurada")
+        return
+    entries = coord.get_filtered_blackbox(
+        equipment=msg.get("equipment") or None,
+        event_type=msg.get("event_type") or None,
+        collapse=bool(msg.get("collapse", True)),
+    )
+    connection.send_result(msg["id"], {"entries": entries})

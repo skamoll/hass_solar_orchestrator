@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-23
+
+### Added
+- **Smart Water Heater (`1054 W` Real Calibration, Thermostat Idle & Real Shower Pattern):**
+  - Corrected default water heater nominal power from `2000 W` to `1054 W` (`DEFAULT_HEATER_START_EXPORT_W = 1150 W`).
+  - Mechanical thermostat cut detection (`>800 W` observed then `<100 W` fresh for `300 s` → `heater_thermostat_idle`) releases `1054 W` without triggering false quarantine (`unavailable`/`unknown`/stale never coerced to `0 W`).
+  - Real shower pattern detector (`V3-M02`): triggers via flow `>= 2.5 L/min` (`45 s`), volume spike `>= 2 L` (`60 s`), or abrupt drop `ΔT <= -1.5 °C` (`10 min`) → blocks optimization `turn_off` for `15 min` post-flow (hard capped at `90 min`, persisted across restarts, never overrides electrical/ICP safety cuts).
+  - One-touch `+ Ducha extra hoy` (`extra_shower_today`) expiring at local midnight.
+- **Concurrent Surplus Sharing, Multi-Day Forecast & Proactive BYD/Climate:**
+  - Simultaneous load sharing (`V3-M06`): Pool (`250 W`) + Heater (`1054 W`) + EV (`>= 6 A`) share surplus instead of rigid mutexes, stepping down EV amps first on deficit.
+  - 3–5 day `weather.get_forecasts` daily integration (`30 min` cache) with `storm_alert` (`⛈️ Temporal en camino`) + enriched `climate.aire_comedor` solar advice (`800/500 W` hysteresis).
+  - Unplugged BYD solar surplus alert (`zone.home >= 10 min`, `trydan_conectado == off`, surplus `>= 1400 W`, SoC `< 85%`) with 1-tap `Silenciar hoy` (`mute_ev_nag_today`).
+  - Cloud-bridging leaky bucket (`0.2 kWh / 5 min / 0.5 kWh day`) tracked passively in `observing` metrics.
+- **Granular Per-Load Activation, HA Conflict Interlock & Zero-Focus-Loss UX/UI:**
+  - Independent `observing`/`active` toggles per load (`pool`, `heater`, `ev`) with automatic HA automation conflict detection (`detect_conflicts`).
+  - 1-click HA Entity Auto-Discovery (`hass_solar_orchestrator/entities_scan`) with live ✅/⚠️ validation.
+  - Refactored `solar-orchestrator-panel.js` with single-mount Shadow DOM + `requestAnimationFrame` surgical DOM patching (never loses input focus, scroll, or slider edits), animated CSS/SVG energy flow (`prefers-reduced-motion` safe), `fmtW()`, and filterable Blackbox with `×N` collapse + JSON export.
+
 ## [0.2.0] - 2026-11-23
 
 ### Added

@@ -169,3 +169,33 @@ clear_quarantine:
             - ev
             - heater
             - pool
+
+set_load_mode:
+  name: Set granular load mode
+  description: Switch a single load between observing and active (blocked if HA automation conflict exists).
+  fields:
+    load_id:
+      name: Load ID
+      required: true
+      selector:
+        select:
+          options:
+            - pool
+            - heater
+            - ev
+    mode:
+      name: Mode
+      required: true
+      selector:
+        select:
+          options:
+            - observing
+            - active
+
+extra_shower_today:
+  name: Extra shower today
+  description: Boost hot water priority until local midnight.
+
+mute_ev_nag_today:
+  name: Mute BYD unplugged alert today
+  description: Silence the unplugged EV solar surplus reminder until local midnight.

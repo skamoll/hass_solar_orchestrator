@@ -34,7 +34,7 @@ async def async_register_sidebar_panel(hass: HomeAssistant) -> None:
         frontend_url_path=PANEL_URL_PATH,
         sidebar_title="Solar Orchestrator",
         sidebar_icon="mdi:solar-power-variant",
-        module_url=f"{PANEL_STATIC_URL}/solar-orchestrator-panel.js?v=0.2.0",
+        module_url=f"{PANEL_STATIC_URL}/solar-orchestrator-panel.js?v=0.3.0",
         require_admin=False,
         embed_iframe=False,
     )
