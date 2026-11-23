@@ -103,7 +103,7 @@ from .models import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-STORAGE_VERSION = 2
+STORAGE_VERSION = 1
 
 
 def _parse_dt(raw: str | None) -> datetime | None:
