@@ -89,7 +89,10 @@
       "ev_budget": { "name": "EV power budget" },
       "recommended_ev_amps": { "name": "Recommended EV current" },
       "pool_minutes_today": { "name": "Pool runtime today" },
-      "telemetry_source": { "name": "Telemetry source" }
+      "telemetry_source": { "name": "Telemetry source" },
+      "traffic_light": { "name": "Traffic light status" },
+      "icp_headroom": { "name": "ICP headroom" },
+      "estimated_savings_today": { "name": "Estimated savings today" }
     },
     "binary_sensor": {
       "degraded": { "name": "Degraded telemetry" },
@@ -105,7 +108,8 @@
           "auto_ev_modulated": "Auto EV Modulated (full HA control)",
           "force_ev": "Force EV charge",
           "house_priority": "House battery priority",
-          "paused": "Paused"
+          "paused": "Paused",
+          "manual_total": "Manual total (full pause)"
         }
       }
     },

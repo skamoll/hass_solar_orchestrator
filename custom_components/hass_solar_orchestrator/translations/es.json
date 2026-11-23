@@ -89,7 +89,10 @@
       "ev_budget": { "name": "Presupuesto potencia VE" },
       "recommended_ev_amps": { "name": "Intensidad VE recomendada" },
       "pool_minutes_today": { "name": "Tiempo depuradora hoy" },
-      "telemetry_source": { "name": "Fuente de telemetría" }
+      "telemetry_source": { "name": "Fuente de telemetría" },
+      "traffic_light": { "name": "Semáforo global" },
+      "icp_headroom": { "name": "Margen ICP disponible" },
+      "estimated_savings_today": { "name": "Ahorro estimado hoy" }
     },
     "binary_sensor": {
       "degraded": { "name": "Telemetría degradada" },
@@ -105,7 +108,8 @@
           "auto_ev_modulated": "Auto VE Modulado (control total HA)",
           "force_ev": "Forzar carga VE",
           "house_priority": "Prioridad batería casa",
-          "paused": "Pausado"
+          "paused": "Pausado",
+          "manual_total": "Manual total (pausa completa)"
         }
       }
     },

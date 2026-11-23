@@ -1,0 +1,171 @@
+set_mode:
+  name: Set operating mode
+  description: Switch orchestrator operating mode (observing, active modes, or manual_total with auto-expiry back to observing).
+  fields:
+    mode:
+      name: Mode
+      required: true
+      selector:
+        select:
+          options:
+            - observing
+            - auto_solar
+            - auto_ev_modulated
+            - force_ev
+            - house_priority
+            - paused
+            - manual_total
+    duration_minutes:
+      name: Duration (minutes)
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 1440
+          unit_of_measurement: min
+
+apply_profile:
+  name: Apply or preview profile
+  description: Preview impact or apply a 1-touch energy profile.
+  fields:
+    profile:
+      name: Profile
+      required: true
+      selector:
+        select:
+          options:
+            - saving
+            - comfort
+            - fast_charge
+            - vacation
+    vacation_until:
+      name: Vacation end date
+      required: false
+      selector:
+        text:
+    preview_only:
+      name: Preview only
+      required: false
+      default: false
+      selector:
+        boolean:
+
+set_priorities:
+  name: Set load priorities
+  description: Reorder orchestrable loads keeping house locked at #1.
+  fields:
+    priority_order:
+      name: Priority order
+      required: true
+      selector:
+        object:
+    protected_loads:
+      name: Protected loads
+      required: false
+      selector:
+        object:
+    blocked_loads:
+      name: Blocked loads
+      required: false
+      selector:
+        object:
+
+set_ev_commitment:
+  name: Set EV departure commitment
+  description: Configure target SoC, departure time, and optional valley grid top-up.
+  fields:
+    target_soc:
+      name: Target SoC
+      required: true
+      selector:
+        number:
+          min: 20
+          max: 100
+          unit_of_measurement: "%"
+    target_time_hhmm:
+      name: Departure time (HH:MM)
+      required: true
+      selector:
+        text:
+    allow_grid_topup:
+      name: Complete with grid if needed
+      required: true
+      selector:
+        boolean:
+    grid_deadline_hhmm:
+      name: Grid decision deadline (HH:MM)
+      required: true
+      selector:
+        text:
+
+override_load:
+  name: Override load or boost EV
+  description: Apply an expiring 1-touch override to a load or trigger EV Charge Now.
+  fields:
+    load_id:
+      name: Load ID
+      required: true
+      selector:
+        select:
+          options:
+            - ev
+            - heater
+            - pool
+    action:
+      name: Action
+      required: true
+      selector:
+        select:
+          options:
+            - "on"
+            - "off"
+            - auto
+            - charge_now
+    duration_minutes:
+      name: Duration (minutes)
+      required: false
+      default: 60
+      selector:
+        number:
+          min: 5
+          max: 1440
+          unit_of_measurement: min
+
+save_settings:
+  name: Save settings
+  description: Save tariff, contracted power, ICP margin, or advanced orchestrator settings.
+  fields:
+    data:
+      name: Settings object
+      required: true
+      selector:
+        object:
+
+restore_defaults:
+  name: Restore recommended defaults
+  description: Restore recommended safe values for a configuration section.
+  fields:
+    section:
+      name: Section
+      required: false
+      default: all
+      selector:
+        select:
+          options:
+            - all
+            - safety
+            - loads
+
+clear_quarantine:
+  name: Clear load quarantine
+  description: Re-enable a load after inspecting its W-return discrepancy.
+  fields:
+    load_id:
+      name: Load ID
+      required: true
+      selector:
+        select:
+          options:
+            - ev
+            - heater
+            - pool

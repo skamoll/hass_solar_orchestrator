@@ -37,7 +37,5 @@ class OrchestratorModeSelect(OrchestratorEntity, SelectEntity):
         return self.coordinator.config.mode.value
 
     async def async_select_option(self, option: str) -> None:
-        """Switch operating mode, persist, and re-evaluate immediately."""
-        self.coordinator.config.mode = OperatingMode(option)
-        await self.coordinator.async_save_state()
-        await self.coordinator.async_request_refresh()
+        """Switch operating mode safely (purging queue on observing/manual_total)."""
+        await self.coordinator.async_set_mode(OperatingMode(option))

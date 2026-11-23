@@ -40,6 +40,9 @@ SENSORS: tuple[OrchestratorSensorDescription, ...] = (
         value_fn=lambda _c, p: p.decision_summary[:255],
         attrs_fn=lambda c, p: {
             "effective_mode": p.effective_mode,
+            "safety_state": p.safety_state.value,
+            "traffic_light": p.traffic_light.value,
+            "human_headline": p.human_headline,
             "reasons": list(p.reasons),
             "pending_actions": [
                 {"target": a.target, "action": a.action, "value": a.value, "reason": a.reason}
@@ -54,6 +57,19 @@ SENSORS: tuple[OrchestratorSensorDescription, ...] = (
             ),
             "handoff_waiting_for_off": c.runtime_state.handoff_waiting_for_off,
         },
+    ),
+    OrchestratorSensorDescription(
+        key="traffic_light",
+        translation_key="traffic_light",
+        value_fn=lambda _c, p: p.traffic_light.value,
+    ),
+    OrchestratorSensorDescription(
+        key="icp_headroom",
+        translation_key="icp_headroom",
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        value_fn=lambda _c, p: p.icp_headroom_w,
     ),
     OrchestratorSensorDescription(
         key="usable_surplus",
@@ -86,6 +102,13 @@ SENSORS: tuple[OrchestratorSensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         native_unit_of_measurement=UnitOfTime.MINUTES,
         value_fn=lambda c, _p: round(c.runtime_state.pool_minutes_today, 1),
+    ),
+    OrchestratorSensorDescription(
+        key="estimated_savings_today",
+        translation_key="estimated_savings_today",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        native_unit_of_measurement="EUR",
+        value_fn=lambda _c, p: p.estimated_savings_today_eur,
     ),
     OrchestratorSensorDescription(
         key="telemetry_source",

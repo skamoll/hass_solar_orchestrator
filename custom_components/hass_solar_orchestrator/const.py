@@ -5,6 +5,9 @@ from __future__ import annotations
 from enum import StrEnum
 
 DOMAIN = "hass_solar_orchestrator"
+PANEL_URL_PATH = "solar-orchestrator"
+PANEL_COMPONENT_NAME = "solar-orchestrator-panel"
+PANEL_STATIC_URL = "/hass_solar_orchestrator_static"
 
 CONF_SOLAR_POWER_ENTITY = "solar_power_entity"
 CONF_LOAD_POWER_ENTITY = "load_power_entity"
@@ -32,6 +35,9 @@ CONF_HEATER_POWER_ENTITY = "heater_power_entity"
 CONF_POOL_SWITCH_ENTITY = "pool_switch_entity"
 CONF_POOL_POWER_ENTITY = "pool_power_entity"
 
+CONF_TARIFF_PRICE_ENTITY = "tariff_price_entity"
+CONF_SOLAR_FORECAST_ENTITY = "solar_forecast_entity"
+
 CONF_EVAL_INTERVAL_SECONDS = "eval_interval_seconds"
 CONF_STALE_TIMEOUT_SECONDS = "stale_timeout_seconds"
 CONF_HOUSE_SOC_FLOOR = "house_soc_floor"
@@ -46,6 +52,10 @@ CONF_POOL_DAILY_MAX_MINUTES = "pool_daily_max_minutes"
 CONF_POOL_COOLDOWN_MINUTES = "pool_cooldown_minutes"
 CONF_IMPORT_SHED_THRESHOLD_W = "import_shed_threshold_w"
 CONF_BATTERY_SLACK_W = "battery_slack_w"
+CONF_CONTRACTED_POWER_W = "contracted_power_w"
+CONF_ICP_MARGIN_W = "icp_margin_w"
+CONF_BOOT_GRACE_SECONDS = "boot_grace_seconds"
+CONF_SETTLING_LOCK_SECONDS = "settling_lock_seconds"
 
 DEFAULT_EVAL_INTERVAL_SECONDS = 10
 DEFAULT_STALE_TIMEOUT_SECONDS = 30
@@ -64,9 +74,13 @@ DEFAULT_HEATER_TARGET_TEMP = 45.0
 DEFAULT_HEATER_NOMINAL_W = 2000.0
 DEFAULT_HEATER_START_EXPORT_W = 2000.0
 DEFAULT_HEATER_HOLD_SECONDS = 300
+DEFAULT_HEATER_MIN_ON_SECONDS = 600
+DEFAULT_HEATER_MIN_OFF_SECONDS = 300
 DEFAULT_POOL_NOMINAL_W = 250.0
 DEFAULT_POOL_START_EXPORT_W = 1050.0
 DEFAULT_POOL_HOLD_SECONDS = 300
+DEFAULT_POOL_MIN_ON_SECONDS = 600
+DEFAULT_POOL_MIN_OFF_SECONDS = 600
 DEFAULT_POOL_DAILY_MAX_MINUTES = 360
 DEFAULT_POOL_COOLDOWN_MINUTES = 60
 DEFAULT_IMPORT_SHED_THRESHOLD_W = 300.0
@@ -74,6 +88,32 @@ DEFAULT_EMERGENCY_IMPORT_W = 1000.0
 DEFAULT_AUX_SHED_HOLD_SECONDS = 600
 DEFAULT_BATTERY_SLACK_W = 0.0
 DEFAULT_BATTERY_DISCHARGE_SHED_W = 100.0
+DEFAULT_CONTRACTED_POWER_W = 5750.0
+DEFAULT_ICP_MARGIN_W = 500.0
+DEFAULT_BOOT_GRACE_SECONDS = 30
+DEFAULT_SETTLING_LOCK_SECONDS = 15
+DEFAULT_MANUAL_TOTAL_MINUTES = 60
+DEFAULT_EXTERNAL_OVERRIDE_MINUTES = 30
+DEFAULT_TARIFF_P1_EUR = 0.24
+DEFAULT_TARIFF_P2_EUR = 0.16
+DEFAULT_TARIFF_P3_EUR = 0.10
+DEFAULT_EXPORT_COMP_EUR = 0.06
+DEFAULT_PRIORITY_ORDER: tuple[str, ...] = ("house", "ev", "heater", "pool")
+MAX_BLACKBOX_ENTRIES = 200
+
+FORBIDDEN_ENTITY_PATTERNS: tuple[str, ...] = (
+    r".*general.*",
+    r".*(?:^|[._-])icp(?:$|[._-]).*",
+    r".*diferencial.*",
+    r".*inverter.*",
+    r".*inversor.*",
+    r".*(?:^|[._-])bms(?:$|[._-]).*",
+    r".*(?:^|[._-])byd(?:$|[._-]).*",
+    r".*frigorifico.*",
+    r".*nevera.*",
+    r".*router.*",
+    r".*server.*",
+)
 
 
 class OperatingMode(StrEnum):
@@ -85,6 +125,37 @@ class OperatingMode(StrEnum):
     FORCE_EV = "force_ev"
     HOUSE_PRIORITY = "house_priority"
     PAUSED = "paused"
+    MANUAL_TOTAL = "manual_total"
+
+
+class ProfileName(StrEnum):
+    """One-touch user profiles."""
+
+    SAVING = "saving"
+    COMFORT = "comfort"
+    FAST_CHARGE = "fast_charge"
+    VACATION = "vacation"
+
+
+class SafetyState(StrEnum):
+    """Safety state machine states for the power arbiter."""
+
+    BOOT_GRACE = "boot_grace"
+    OBSERVING = "observing"
+    NORMAL = "normal"
+    DEGRADED = "degraded"
+    SAFE_HOLD = "safe_hold"
+    MANUAL_TOTAL = "manual_total"
+
+
+class GlobalTrafficLight(StrEnum):
+    """Global status indicator for the sidebar panel."""
+
+    OPTIMAL = "optimal"
+    WARNING = "warning"
+    CRITICAL = "critical"
+    SHADOW = "shadow"
+    MANUAL = "manual"
 
 
 class TelemetrySource(StrEnum):
