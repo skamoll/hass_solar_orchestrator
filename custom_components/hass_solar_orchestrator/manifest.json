@@ -1,0 +1,12 @@
+{
+  "domain": "hass_solar_orchestrator",
+  "name": "Solar Excess Orchestrator",
+  "categories": ["energy"],
+  "codeowners": ["@skamoll"],
+  "config_flow": true,
+  "documentation": "https://github.com/skamoll/hass_solar_orchestrator",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/skamoll/hass_solar_orchestrator/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

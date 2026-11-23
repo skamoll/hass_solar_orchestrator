@@ -1,0 +1,57 @@
+name: Bump Version
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version increment type"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Bump version in pyproject.toml and manifest.json, commit, and tag
+        run: |
+          python3 - <<'PY'
+          import json, re, pathlib
+
+          bump = "${{ inputs.bump }}"
+          pp = pathlib.Path("pyproject.toml")
+          txt = pp.read_text()
+          m = re.search(r'^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"', txt, re.M)
+          maj, min_, pat = map(int, m.groups())
+          if bump == "major":
+              maj, min_, pat = maj + 1, 0, 0
+          elif bump == "minor":
+              min_, pat = min_ + 1, 0
+          else:
+              pat += 1
+          new_ver = f"{maj}.{min_}.{pat}"
+          pp.write_text(re.sub(r'^version\s*=\s*"\d+\.\d+\.\d+"', f'version = "{new_ver}"', txt, count=1, flags=re.M))
+
+          mp = pathlib.Path("custom_components/hass_solar_orchestrator/manifest.json")
+          manifest = json.loads(mp.read_text())
+          manifest["version"] = new_ver
+          mp.write_text(json.dumps(manifest, indent=2) + "\n")
+          print(f"NEW_VER={new_ver}")
+          PY
+          NEW_VER=$(python3 -c "import json; print(json.load(open('custom_components/hass_solar_orchestrator/manifest.json'))['version'])")
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml custom_components/hass_solar_orchestrator/manifest.json
+          git commit -m "chore(release): v${NEW_VER}"
+          git tag -a "v${NEW_VER}" -m "Release v${NEW_VER}"
+          git push origin main --follow-tags

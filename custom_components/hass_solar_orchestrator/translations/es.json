@@ -1,0 +1,126 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configurar Orquestador de Excedentes Solares",
+        "description": "Asocia las entidades locales del inversor, respaldo en nube, cargador, vehículo y cargas auxiliares. Arranca de forma segura en modo Observación (sin actuar).",
+        "data": {
+          "solar_power_entity": "Sensor de potencia solar FV (local)",
+          "load_power_entity": "Sensor de consumo de la casa (local)",
+          "grid_power_entity": "Sensor de potencia de red (+ importa / - exporta, local)",
+          "battery_power_entity": "Sensor de potencia de batería (- carga / + descarga)",
+          "battery_soc_entity": "Sensor de SoC de batería de casa (%)",
+          "cloud_pv_power_entity": "Respaldo nube: potencia FV (opcional)",
+          "cloud_grid_power_entity": "Respaldo nube: potencia de red (opcional)",
+          "cloud_battery_power_entity": "Respaldo nube: potencia de batería (opcional)",
+          "cloud_battery_soc_entity": "Respaldo nube: SoC de batería (opcional)",
+          "ev_connected_entity": "Sensor binario de coche enchufado",
+          "ev_charging_entity": "Sensor binario de coche cargando",
+          "ev_power_entity": "Sensor de potencia de carga del coche",
+          "ev_current_entity": "Sensor de intensidad actual del coche (A)",
+          "ev_min_current_entity": "Entidad number de intensidad mínima del cargador (A)",
+          "ev_mode_entity": "Sensor del modo FV del cargador",
+          "ev_soc_entity": "Sensor de SoC del vehículo (%)",
+          "ev_mode_service": "Servicio de cambio de modo FV (ej. rest_command.trydan_modo_fv)",
+          "heater_switch_entity": "Interruptor del termo eléctrico",
+          "heater_temp_entity": "Sensor de temperatura del termo (°C)",
+          "heater_power_entity": "Sensor de potencia medida del termo (W)",
+          "pool_switch_entity": "Interruptor de la depuradora",
+          "pool_power_entity": "Sensor de potencia medida de la depuradora (W)"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigurar Orquestador de Excedentes Solares",
+        "description": "Actualiza las entidades mapeadas sin perder historial ni consignas.",
+        "data": {
+          "solar_power_entity": "Sensor de potencia solar FV (local)",
+          "load_power_entity": "Sensor de consumo de la casa (local)",
+          "grid_power_entity": "Sensor de potencia de red (+ importa / - exporta, local)",
+          "battery_power_entity": "Sensor de potencia de batería (- carga / + descarga)",
+          "battery_soc_entity": "Sensor de SoC de batería de casa (%)",
+          "cloud_pv_power_entity": "Respaldo nube: potencia FV (opcional)",
+          "cloud_grid_power_entity": "Respaldo nube: potencia de red (opcional)",
+          "cloud_battery_power_entity": "Respaldo nube: potencia de batería (opcional)",
+          "cloud_battery_soc_entity": "Respaldo nube: SoC de batería (opcional)",
+          "ev_connected_entity": "Sensor binario de coche enchufado",
+          "ev_charging_entity": "Sensor binario de coche cargando",
+          "ev_power_entity": "Sensor de potencia de carga del coche",
+          "ev_current_entity": "Sensor de intensidad actual del coche (A)",
+          "ev_min_current_entity": "Entidad number de intensidad mínima del cargador (A)",
+          "ev_mode_entity": "Sensor del modo FV del cargador",
+          "ev_soc_entity": "Sensor de SoC del vehículo (%)",
+          "ev_mode_service": "Servicio de cambio de modo FV (ej. rest_command.trydan_modo_fv)",
+          "heater_switch_entity": "Interruptor del termo eléctrico",
+          "heater_temp_entity": "Sensor de temperatura del termo (°C)",
+          "heater_power_entity": "Sensor de potencia medida del termo (W)",
+          "pool_switch_entity": "Interruptor de la depuradora",
+          "pool_power_entity": "Sensor de potencia medida de la depuradora (W)"
+        }
+      }
+    },
+    "abort": {
+      "reconfigure_successful": "Reconfiguración completada"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opciones del Orquestador de Excedentes Solares",
+        "data": {
+          "eval_interval_seconds": "Intervalo de evaluación (segundos)",
+          "stale_timeout_seconds": "Timeout de telemetría local (segundos)",
+          "heater_start_export_w": "Umbral de vertido para arrancar termo (W)",
+          "pool_start_export_w": "Umbral de vertido para arrancar depuradora (W)",
+          "import_shed_threshold_w": "Umbral de importación para reducir carga VE (W)"
+        }
+      }
+    }
+  },
+  "issues": {
+    "degraded_telemetry": {
+      "title": "Telemetría local del inversor no disponible",
+      "description": "El orquestador ha pasado a modo DEGRADED porque la telemetría Modbus local lleva más de 2 minutos sin actualizarse. Se bloquean subidas y arranques auxiliares y el cargador se ha dejado en Modo 3 seguro."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "decision_summary": { "name": "Resumen de decisión" },
+      "usable_surplus": { "name": "Excedente solar utilizable" },
+      "ev_budget": { "name": "Presupuesto potencia VE" },
+      "recommended_ev_amps": { "name": "Intensidad VE recomendada" },
+      "pool_minutes_today": { "name": "Tiempo depuradora hoy" },
+      "telemetry_source": { "name": "Fuente de telemetría" }
+    },
+    "binary_sensor": {
+      "degraded": { "name": "Telemetría degradada" },
+      "heater_solar_owned": { "name": "Termo controlado por solar" },
+      "pool_solar_owned": { "name": "Depuradora controlada por solar" }
+    },
+    "select": {
+      "operating_mode": {
+        "name": "Modo de operación",
+        "state": {
+          "observing": "Observación (sin actuar)",
+          "auto_solar": "Auto Solar (Trydan autónomo + auxiliares)",
+          "auto_ev_modulated": "Auto VE Modulado (control total HA)",
+          "force_ev": "Forzar carga VE",
+          "house_priority": "Prioridad batería casa",
+          "paused": "Pausado"
+        }
+      }
+    },
+    "number": {
+      "house_soc_floor": { "name": "Suelo SoC batería casa" },
+      "ev_target_soc": { "name": "SoC objetivo vehículo" },
+      "ev_max_amps": { "name": "Intensidad máxima VE" },
+      "heater_target_temp": { "name": "Temperatura objetivo termo" },
+      "pool_daily_max_minutes": { "name": "Límite diario depuradora" },
+      "battery_slack_w": { "name": "Amortiguación transitoria batería" }
+    },
+    "switch": {
+      "heater_enabled": { "name": "Gestionar termo eléctrico" },
+      "pool_enabled": { "name": "Gestionar depuradora" },
+      "pool_manual_blocked_today": { "name": "Bloquear depuradora hoy" }
+    }
+  }
+}

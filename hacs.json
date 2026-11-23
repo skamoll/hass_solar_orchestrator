@@ -1,0 +1,5 @@
+{
+  "name": "Solar Excess Orchestrator",
+  "render_readme": true,
+  "homeassistant": "2024.6.0"
+}

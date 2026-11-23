@@ -1,0 +1,126 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configure Solar Excess Orchestrator",
+        "description": "Map your local inverter, cloud fallback, EV charger, vehicle, and auxiliary load entities. Starts safely in Observing (dry-run) mode.",
+        "data": {
+          "solar_power_entity": "Solar PV power sensor (local)",
+          "load_power_entity": "House load power sensor (local)",
+          "grid_power_entity": "Grid power sensor (+ import / - export, local)",
+          "battery_power_entity": "House battery power sensor (- charge / + discharge)",
+          "battery_soc_entity": "House battery SoC sensor (%)",
+          "cloud_pv_power_entity": "Cloud fallback PV power sensor (optional)",
+          "cloud_grid_power_entity": "Cloud fallback grid power sensor (optional)",
+          "cloud_battery_power_entity": "Cloud fallback battery power sensor (optional)",
+          "cloud_battery_soc_entity": "Cloud fallback battery SoC sensor (optional)",
+          "ev_connected_entity": "EV charger connected binary sensor",
+          "ev_charging_entity": "EV charging binary sensor",
+          "ev_power_entity": "EV charging power sensor",
+          "ev_current_entity": "EV charging current sensor (A)",
+          "ev_min_current_entity": "EV minimum current number entity (A)",
+          "ev_mode_entity": "EV solar mode sensor",
+          "ev_soc_entity": "Vehicle SoC sensor (%)",
+          "ev_mode_service": "EV mode service (e.g. rest_command.trydan_modo_fv)",
+          "heater_switch_entity": "Water heater switch entity",
+          "heater_temp_entity": "Water heater temperature sensor (°C)",
+          "heater_power_entity": "Water heater measured power sensor (W)",
+          "pool_switch_entity": "Pool pump switch entity",
+          "pool_power_entity": "Pool pump measured power sensor (W)"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Solar Excess Orchestrator",
+        "description": "Update mapped entities without losing orchestrator history or setpoints.",
+        "data": {
+          "solar_power_entity": "Solar PV power sensor (local)",
+          "load_power_entity": "House load power sensor (local)",
+          "grid_power_entity": "Grid power sensor (+ import / - export, local)",
+          "battery_power_entity": "House battery power sensor (- charge / + discharge)",
+          "battery_soc_entity": "House battery SoC sensor (%)",
+          "cloud_pv_power_entity": "Cloud fallback PV power sensor (optional)",
+          "cloud_grid_power_entity": "Cloud fallback grid power sensor (optional)",
+          "cloud_battery_power_entity": "Cloud fallback battery power sensor (optional)",
+          "cloud_battery_soc_entity": "Cloud fallback battery SoC sensor (optional)",
+          "ev_connected_entity": "EV charger connected binary sensor",
+          "ev_charging_entity": "EV charging binary sensor",
+          "ev_power_entity": "EV charging power sensor",
+          "ev_current_entity": "EV charging current sensor (A)",
+          "ev_min_current_entity": "EV minimum current number entity (A)",
+          "ev_mode_entity": "EV solar mode sensor",
+          "ev_soc_entity": "Vehicle SoC sensor (%)",
+          "ev_mode_service": "EV mode service (e.g. rest_command.trydan_modo_fv)",
+          "heater_switch_entity": "Water heater switch entity",
+          "heater_temp_entity": "Water heater temperature sensor (°C)",
+          "heater_power_entity": "Water heater measured power sensor (W)",
+          "pool_switch_entity": "Pool pump switch entity",
+          "pool_power_entity": "Pool pump measured power sensor (W)"
+        }
+      }
+    },
+    "abort": {
+      "reconfigure_successful": "Reconfiguration successful"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Solar Excess Orchestrator Options",
+        "data": {
+          "eval_interval_seconds": "Evaluation interval (seconds)",
+          "stale_timeout_seconds": "Local telemetry stale timeout (seconds)",
+          "heater_start_export_w": "Water heater start export threshold (W)",
+          "pool_start_export_w": "Pool pump start export threshold (W)",
+          "import_shed_threshold_w": "EV safety reduction grid import threshold (W)"
+        }
+      }
+    }
+  },
+  "issues": {
+    "degraded_telemetry": {
+      "title": "Local inverter telemetry unavailable",
+      "description": "Solar Excess Orchestrator entered DEGRADED mode because local Modbus telemetry has been stale or unavailable for over 2 minutes. Step-ups and auxiliary starts are blocked and the EV charger was placed in safe Mode 3."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "decision_summary": { "name": "Decision summary" },
+      "usable_surplus": { "name": "Usable solar surplus" },
+      "ev_budget": { "name": "EV power budget" },
+      "recommended_ev_amps": { "name": "Recommended EV current" },
+      "pool_minutes_today": { "name": "Pool runtime today" },
+      "telemetry_source": { "name": "Telemetry source" }
+    },
+    "binary_sensor": {
+      "degraded": { "name": "Degraded telemetry" },
+      "heater_solar_owned": { "name": "Heater solar controlled" },
+      "pool_solar_owned": { "name": "Pool solar controlled" }
+    },
+    "select": {
+      "operating_mode": {
+        "name": "Operating mode",
+        "state": {
+          "observing": "Observing (dry-run)",
+          "auto_solar": "Auto Solar (Trydan autonomous + auxiliaries)",
+          "auto_ev_modulated": "Auto EV Modulated (full HA control)",
+          "force_ev": "Force EV charge",
+          "house_priority": "House battery priority",
+          "paused": "Paused"
+        }
+      }
+    },
+    "number": {
+      "house_soc_floor": { "name": "House battery SoC floor" },
+      "ev_target_soc": { "name": "Vehicle target SoC" },
+      "ev_max_amps": { "name": "EV max current" },
+      "heater_target_temp": { "name": "Water heater target temperature" },
+      "pool_daily_max_minutes": { "name": "Pool daily max runtime" },
+      "battery_slack_w": { "name": "Battery transient slack" }
+    },
+    "switch": {
+      "heater_enabled": { "name": "Manage water heater" },
+      "pool_enabled": { "name": "Manage pool pump" },
+      "pool_manual_blocked_today": { "name": "Block pool pump today" }
+    }
+  }
+}
