@@ -306,6 +306,13 @@ class SolarOrchestratorPanel extends HTMLElement {
               <div class="muted">Ahorro hoy / mes: <strong id="val-savings">—</strong></div>
               <div class="muted">Nubes hoy: <span id="val-cloud-pocket">0.00</span> / 0.50 kWh</div>
             </div>
+            <div class="row" style="margin-top:6px">
+              <div class="muted">Compra red hoy / mes: <strong id="val-import-cost">—</strong></div>
+              <div class="muted">Vertido hoy / mes: <strong id="val-export-rev">—</strong></div>
+            </div>
+            <div class="row" style="margin-top:4px">
+              <div class="muted">Coste neto hoy / mes: <strong id="val-net-cost">—</strong></div>
+            </div>
           </div>
 
           <div class="card c12">
@@ -651,8 +658,14 @@ class SolarOrchestratorPanel extends HTMLElement {
     const poolPct = Math.min(100, ((s.pool_minutes_today || 0) / Math.max(1, s.pool_daily_max_minutes || 360)) * 100);
     q("pool-bar").style.width = `${poolPct}%`;
 
-    const savTxt = p.estimated_savings_today_eur !== null && p.estimated_savings_today_eur !== undefined ? `${p.estimated_savings_today_eur.toFixed(2)} € / ${Number(p.estimated_savings_month_eur || 0).toFixed(2)} €` : "Sin tarifa";
-    setTxt("val-savings", savTxt);
+    const fmtEurPair = (today, month) =>
+      today !== null && today !== undefined
+        ? `${Number(today).toFixed(2)} € / ${Number(month || 0).toFixed(2)} €`
+        : "Sin tarifa";
+    setTxt("val-savings", fmtEurPair(p.estimated_savings_today_eur, p.estimated_savings_month_eur));
+    setTxt("val-import-cost", fmtEurPair(p.grid_import_cost_today_eur, p.grid_import_cost_month_eur));
+    setTxt("val-export-rev", fmtEurPair(p.grid_export_revenue_today_eur, p.grid_export_revenue_month_eur));
+    setTxt("val-net-cost", fmtEurPair(p.net_cost_today_eur, p.net_cost_month_eur));
     setTxt("val-cloud-pocket", Number(p.cloud_pocket_used_kwh_today || 0).toFixed(2));
     setTxt("val-sem-tmw", s.solar_forecast_tomorrow_kwh ?? "—");
     setTxt("bb-count", (d.blackbox || []).length);

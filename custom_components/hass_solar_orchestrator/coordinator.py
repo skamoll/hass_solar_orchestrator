@@ -284,6 +284,10 @@ class SolarOrchestratorCoordinator(DataUpdateCoordinator[DispatchPlan]):
             ev_quarantined=bool(raw.get("ev_quarantined", False)),
             savings_today_eur=float(raw.get("savings_today_eur", 0.0)),
             savings_month_eur=float(raw.get("savings_month_eur", 0.0)),
+            grid_import_cost_today_eur=float(raw.get("grid_import_cost_today_eur", 0.0)),
+            grid_import_cost_month_eur=float(raw.get("grid_import_cost_month_eur", 0.0)),
+            grid_export_revenue_today_eur=float(raw.get("grid_export_revenue_today_eur", 0.0)),
+            grid_export_revenue_month_eur=float(raw.get("grid_export_revenue_month_eur", 0.0)),
             savings_last_day=raw.get("savings_last_day"),
             savings_last_month=raw.get("savings_last_month"),
             shower_veto_started_at=_parse_dt(raw.get("shower_veto_started_at")),
@@ -375,6 +379,10 @@ class SolarOrchestratorCoordinator(DataUpdateCoordinator[DispatchPlan]):
             "ev_quarantined": self.runtime_state.ev_quarantined,
             "savings_today_eur": self.runtime_state.savings_today_eur,
             "savings_month_eur": self.runtime_state.savings_month_eur,
+            "grid_import_cost_today_eur": self.runtime_state.grid_import_cost_today_eur,
+            "grid_import_cost_month_eur": self.runtime_state.grid_import_cost_month_eur,
+            "grid_export_revenue_today_eur": self.runtime_state.grid_export_revenue_today_eur,
+            "grid_export_revenue_month_eur": self.runtime_state.grid_export_revenue_month_eur,
             "savings_last_day": self.runtime_state.savings_last_day,
             "savings_last_month": self.runtime_state.savings_last_month,
             "blackbox": list(self.blackbox)[:MAX_BLACKBOX_ENTRIES],
@@ -1200,6 +1208,16 @@ class SolarOrchestratorCoordinator(DataUpdateCoordinator[DispatchPlan]):
                 "alerts": [asdict(a) for a in plan.alerts] if plan else [],
                 "estimated_savings_today_eur": plan.estimated_savings_today_eur if plan else None,
                 "estimated_savings_month_eur": plan.estimated_savings_month_eur if plan else None,
+                "grid_import_cost_today_eur": plan.grid_import_cost_today_eur if plan else None,
+                "grid_import_cost_month_eur": plan.grid_import_cost_month_eur if plan else None,
+                "grid_export_revenue_today_eur": (
+                    plan.grid_export_revenue_today_eur if plan else None
+                ),
+                "grid_export_revenue_month_eur": (
+                    plan.grid_export_revenue_month_eur if plan else None
+                ),
+                "net_cost_today_eur": plan.net_cost_today_eur if plan else None,
+                "net_cost_month_eur": plan.net_cost_month_eur if plan else None,
                 "savings_formula": plan.savings_formula if plan else "",
                 "freshness_by_source": plan.freshness_by_source if plan else {},
                 "simulated_actions": [asdict(a) for a in plan.simulated_actions] if plan else [],

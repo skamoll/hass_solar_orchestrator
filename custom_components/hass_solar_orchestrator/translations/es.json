@@ -92,7 +92,10 @@
       "telemetry_source": { "name": "Fuente de telemetría" },
       "traffic_light": { "name": "Semáforo global" },
       "icp_headroom": { "name": "Margen ICP disponible" },
-      "estimated_savings_today": { "name": "Ahorro estimado hoy" }
+      "estimated_savings_today": { "name": "Ahorro estimado hoy" },
+      "grid_import_cost_today": { "name": "Coste consumo red hoy" },
+      "grid_export_revenue_today": { "name": "Ingresos vertido hoy" },
+      "net_cost_today": { "name": "Coste neto hoy" }
     },
     "binary_sensor": {
       "degraded": { "name": "Telemetría degradada" },
