@@ -276,7 +276,9 @@ def test_grid_import_cost_export_revenue_and_net_cost() -> None:
         export_comp_eur=0.08,
     )
     # _ts(0) is 2026-11-23 12:00:00 (Monday, P1)
-    state = OrchestratorState(savings_last_tick=_ts(0), savings_last_day="2026-11-23", savings_last_month="2026-11")
+    state = OrchestratorState(
+        savings_last_tick=_ts(0), savings_last_day="2026-11-23", savings_last_month="2026-11"
+    )
     snap_import = _base_snapshot(600, grid_power_w=2000.0, solar_power_w=0.0)
     plan1, state = evaluate(snap_import, cfg, state)
     # 2 kW * 1/6 h * 0.20 EUR/kWh = 0.0667 EUR
@@ -305,7 +307,9 @@ def test_grid_import_cost_export_revenue_and_net_cost() -> None:
 def test_grid_costs_none_in_conservative_tariff_mode() -> None:
     """Conservative tariff mode omits monetary figures instead of inventing them."""
     cfg = OrchestratorConfig(mode=OperatingMode.OBSERVING, tariff_mode="conservative")
-    state = OrchestratorState(savings_last_tick=_ts(0), savings_last_day="2026-11-23", savings_last_month="2026-11")
+    state = OrchestratorState(
+        savings_last_tick=_ts(0), savings_last_day="2026-11-23", savings_last_month="2026-11"
+    )
     snap = _base_snapshot(60, grid_power_w=1500.0)
     plan, _ = evaluate(snap, cfg, state)
     assert plan.grid_import_cost_today_eur is None

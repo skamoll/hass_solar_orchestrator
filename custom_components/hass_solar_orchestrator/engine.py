@@ -383,7 +383,9 @@ def _update_savings(
             if snapshot.solar_power_w is not None:
                 solar_kw = max(0.0, snapshot.solar_power_w) / 1000.0
                 self_consumed_kw = max(0.0, solar_kw - export_kw)
-                delta_eur = (self_consumed_kw * price_eur + export_kw * config.export_comp_eur) * dt_h
+                delta_eur = (
+                    self_consumed_kw * price_eur + export_kw * config.export_comp_eur
+                ) * dt_h
                 state.savings_today_eur = round(state.savings_today_eur + delta_eur, 4)
                 state.savings_month_eur = round(state.savings_month_eur + delta_eur, 4)
     state.savings_last_tick = snapshot.now
