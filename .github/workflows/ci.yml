@@ -39,7 +39,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
-      - run: python -m pip install ".[dev]"
+      - name: Install Home Assistant and the core component requirements
+        run: |
+          python -m pip install ".[dev]"
+          python tests/ha_test_requirements.py > ha-requirements.txt
+          python -m pip install -r ha-requirements.txt
       - run: pytest -v
 
   hassfest:

@@ -85,6 +85,7 @@ async def _setup_hass(tmp_path: Path) -> tuple[HomeAssistant, ConfigEntry]:
         Path(__file__).resolve().parent.parent / "custom_components"
     )
     hass = HomeAssistant(str(tmp_path))
+    hass.config.skip_pip = True  # deps are preinstalled; never pip at test time
     loader.async_setup(hass)
     await bootstrap.async_from_config_dict({}, hass)
     await hass.async_start()

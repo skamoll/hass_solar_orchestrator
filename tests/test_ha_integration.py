@@ -36,6 +36,7 @@ async def test_ha_setup_entities_mode_switch_and_unload(tmp_path: Path) -> None:
         Path(__file__).resolve().parent.parent / "custom_components"
     )
     hass = HomeAssistant(str(tmp_path))
+    hass.config.skip_pip = True  # deps are preinstalled; never pip at test time
     loader.async_setup(hass)
     await bootstrap.async_from_config_dict({}, hass)
     await hass.async_start()
