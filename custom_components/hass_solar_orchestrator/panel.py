@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from homeassistant.components import panel_custom
@@ -11,6 +12,12 @@ from homeassistant.core import HomeAssistant
 from .const import DOMAIN, PANEL_COMPONENT_NAME, PANEL_STATIC_URL, PANEL_URL_PATH
 
 FRONTEND_DIR = Path(__file__).parent / "frontend"
+PANEL_JS = FRONTEND_DIR / "solar-orchestrator-panel.js"
+
+
+def _panel_js_hash() -> str:
+    """Content hash used as cache-buster so browsers reload the panel after any change."""
+    return hashlib.sha256(PANEL_JS.read_bytes()).hexdigest()[:12]
 
 
 async def async_register_sidebar_panel(hass: HomeAssistant) -> None:
@@ -28,13 +35,15 @@ async def async_register_sidebar_panel(hass: HomeAssistant) -> None:
         ]
     )
 
+    js_version = await hass.async_add_executor_job(_panel_js_hash)
+
     await panel_custom.async_register_panel(
         hass,
         webcomponent_name=PANEL_COMPONENT_NAME,
         frontend_url_path=PANEL_URL_PATH,
         sidebar_title="Solar Orchestrator",
         sidebar_icon="mdi:solar-power-variant",
-        module_url=f"{PANEL_STATIC_URL}/solar-orchestrator-panel.js?v=0.3.0",
+        module_url=f"{PANEL_STATIC_URL}/solar-orchestrator-panel.js?v={js_version}",
         require_admin=False,
         embed_iframe=False,
     )

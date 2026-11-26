@@ -159,6 +159,7 @@ class SolarOrchestratorPanel extends HTMLElement {
         .flow-svg { width: 100%; max-height: 190px; display: block; margin-bottom: 10px; }
         .flow-line { stroke: var(--primary-color, #03a9f4); stroke-width: 3; fill: none; stroke-dasharray: 6 6; animation: flowdash 1.2s linear infinite; }
         .flow-line.idle { stroke: rgba(128,128,128,0.3); stroke-dasharray: none; animation: none; }
+        .flow-line.rev { animation-direction: reverse; }
         @keyframes flowdash { to { stroke-dashoffset: -24; } }
         @media (prefers-reduced-motion: reduce) { .flow-line { animation: none; stroke-dasharray: none; } }
         .flow-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 10px; }
@@ -636,7 +637,11 @@ class SolarOrchestratorPanel extends HTMLElement {
 
     q("svg-l-solar").classList.toggle("idle", !(s.solar_w > 50));
     q("svg-l-bat").classList.toggle("idle", !(Math.abs(s.battery_w || 0) > 50));
+    // Path runs Bat→Casa (discharge, battery_w > 0); charging (battery_w < 0) flows Casa→Bat.
+    q("svg-l-bat").classList.toggle("rev", (s.battery_w || 0) < 0);
     q("svg-l-grid").classList.toggle("idle", !(Math.abs(s.grid_w || 0) > 50));
+    // Path runs Casa→Red (export, grid_w < 0); importing (grid_w > 0) flows Red→Casa.
+    q("svg-l-grid").classList.toggle("rev", (s.grid_w || 0) > 0);
     q("svg-l-ev").classList.toggle("idle", !(s.ev_power_w > 50));
     q("svg-l-heater").classList.toggle("idle", !(s.heater_power_w > 50));
 
