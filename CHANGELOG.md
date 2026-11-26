@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-11-26
+
+### Fixed
+- Live energy flow (`V3-M11`): battery and grid lines now animate according to the power sign (grid import flows Red→Casa, battery charging flows Casa→Bat) instead of always showing discharge/export.
+- Panel JS cache-buster is now the file's content hash instead of a fixed version string, so browsers reload the panel after every frontend change.
+
+### Changed
+- Every push to `main` now publishes a GitHub release automatically (auto-bumping the patch version when the current one is already released), so HACS offers each change as an update.
+
 ## [0.3.1] - 2026-11-25
 
 ### Added
