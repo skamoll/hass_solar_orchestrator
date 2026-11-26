@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from pathlib import Path
 
-from homeassistant.components import panel_custom
+from homeassistant.components import frontend, panel_custom
 from homeassistant.components.http import StaticPathConfig
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 
 from .const import DOMAIN, PANEL_COMPONENT_NAME, PANEL_STATIC_URL, PANEL_URL_PATH
 
@@ -22,18 +23,26 @@ def _panel_js_hash() -> str:
 
 async def async_register_sidebar_panel(hass: HomeAssistant) -> None:
     """Register the static JS bundle and custom left-sidebar panel in Home Assistant."""
-    if hass.data.get(f"{DOMAIN}_panel_registered"):
+    lock = hass.data.setdefault(f"{DOMAIN}_panel_lock", asyncio.Lock())
+    async with lock:
+        await _register_panel(hass)
+
+
+async def _register_panel(hass: HomeAssistant) -> None:
+    if frontend.async_panel_exists(hass, PANEL_URL_PATH):
         return
 
-    await hass.http.async_register_static_paths(
-        [
-            StaticPathConfig(
-                url_path=PANEL_STATIC_URL,
-                path=str(FRONTEND_DIR),
-                cache_headers=False,
-            )
-        ]
-    )
+    if not hass.data.get(f"{DOMAIN}_static_registered"):
+        await hass.http.async_register_static_paths(
+            [
+                StaticPathConfig(
+                    url_path=PANEL_STATIC_URL,
+                    path=str(FRONTEND_DIR),
+                    cache_headers=False,
+                )
+            ]
+        )
+        hass.data[f"{DOMAIN}_static_registered"] = True
 
     js_version = await hass.async_add_executor_job(_panel_js_hash)
 
@@ -47,4 +56,9 @@ async def async_register_sidebar_panel(hass: HomeAssistant) -> None:
         require_admin=False,
         embed_iframe=False,
     )
-    hass.data[f"{DOMAIN}_panel_registered"] = True
+
+
+@callback
+def async_remove_sidebar_panel(hass: HomeAssistant) -> None:
+    """Remove the sidebar link when the final entry unloads."""
+    frontend.async_remove_panel(hass, PANEL_URL_PATH, warn_if_unknown=False)

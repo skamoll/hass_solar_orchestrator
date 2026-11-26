@@ -26,7 +26,14 @@
           "heater_temp_entity": "Water heater temperature sensor (°C)",
           "heater_power_entity": "Water heater measured power sensor (W)",
           "pool_switch_entity": "Pool pump switch entity",
-          "pool_power_entity": "Pool pump measured power sensor (W)"
+          "pool_power_entity": "Pool pump measured power sensor (W)",
+          "tariff_price_entity": "Current import price (EUR/kWh)",
+          "solar_forecast_entity": "Tomorrow’s solar forecast (kWh)",
+          "heater_flow_entity": "Hot water flow (L/min)",
+          "heater_daily_water_entity": "Daily hot water consumption (L)",
+          "ev_tracker_entity": "Vehicle location",
+          "weather_entity": "Daily weather forecast",
+          "climate_entity": "Indoor climate unit"
         }
       },
       "reconfigure": {
@@ -54,7 +61,14 @@
           "heater_temp_entity": "Water heater temperature sensor (°C)",
           "heater_power_entity": "Water heater measured power sensor (W)",
           "pool_switch_entity": "Pool pump switch entity",
-          "pool_power_entity": "Pool pump measured power sensor (W)"
+          "pool_power_entity": "Pool pump measured power sensor (W)",
+          "tariff_price_entity": "Current import price (EUR/kWh)",
+          "solar_forecast_entity": "Tomorrow’s solar forecast (kWh)",
+          "heater_flow_entity": "Hot water flow (L/min)",
+          "heater_daily_water_entity": "Daily hot water consumption (L)",
+          "ev_tracker_entity": "Vehicle location",
+          "weather_entity": "Daily weather forecast",
+          "climate_entity": "Indoor climate unit"
         }
       }
     },
@@ -71,9 +85,15 @@
           "stale_timeout_seconds": "Local telemetry stale timeout (seconds)",
           "heater_start_export_w": "Water heater start export threshold (W)",
           "pool_start_export_w": "Pool pump start export threshold (W)",
-          "import_shed_threshold_w": "EV safety reduction grid import threshold (W)"
+          "import_shed_threshold_w": "EV safety reduction grid import threshold (W)",
+          "pool_season_enabled": "Enable pool season limit",
+          "pool_season_start": "Pool season start (MM-DD)",
+          "pool_season_end": "Pool season end (MM-DD)"
         }
       }
+    },
+    "error": {
+      "invalid_month_day": "Use MM-DD format with a valid calendar date (e.g. 05-01)."
     }
   },
   "issues": {

@@ -3,9 +3,11 @@
 ## Development Setup
 
 ```bash
-python -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install ".[dev]"
+python tests/ha_test_requirements.py > ha-requirements.txt
+pip install -r ha-requirements.txt
 ruff check .
 ruff format --check .
 pytest -v
