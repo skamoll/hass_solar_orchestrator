@@ -13,6 +13,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     EntitySelector,
     EntitySelectorConfig,
     NumberSelector,
@@ -27,6 +28,7 @@ from .const import (
     CONF_BATTERY_POWER_ENTITY,
     CONF_BATTERY_SLACK_W,
     CONF_BATTERY_SOC_ENTITY,
+    CONF_CLIMATE_ENTITY,
     CONF_CLOUD_BATTERY_POWER_ENTITY,
     CONF_CLOUD_BATTERY_SOC_ENTITY,
     CONF_CLOUD_GRID_POWER_ENTITY,
@@ -43,8 +45,11 @@ from .const import (
     CONF_EV_SOC_ENTITY,
     CONF_EV_START_AMPS,
     CONF_EV_TARGET_SOC,
+    CONF_EV_TRACKER_ENTITY,
     CONF_EVAL_INTERVAL_SECONDS,
     CONF_GRID_POWER_ENTITY,
+    CONF_HEATER_DAILY_WATER_ENTITY,
+    CONF_HEATER_FLOW_ENTITY,
     CONF_HEATER_POWER_ENTITY,
     CONF_HEATER_START_EXPORT_W,
     CONF_HEATER_SWITCH_ENTITY,
@@ -58,8 +63,11 @@ from .const import (
     CONF_POOL_POWER_ENTITY,
     CONF_POOL_START_EXPORT_W,
     CONF_POOL_SWITCH_ENTITY,
+    CONF_SOLAR_FORECAST_ENTITY,
     CONF_SOLAR_POWER_ENTITY,
     CONF_STALE_TIMEOUT_SECONDS,
+    CONF_TARIFF_PRICE_ENTITY,
+    CONF_WEATHER_ENTITY,
     DEFAULT_BATTERY_SLACK_W,
     DEFAULT_EV_MAX_AMPS,
     DEFAULT_EV_MIN_AMPS,
@@ -76,102 +84,64 @@ from .const import (
     DEFAULT_STALE_TIMEOUT_SECONDS,
     DOMAIN,
 )
+from .models import (
+    CONF_POOL_SEASON_ENABLED,
+    CONF_POOL_SEASON_END,
+    CONF_POOL_SEASON_START,
+    DEFAULT_POOL_SEASON_ENABLED,
+    DEFAULT_POOL_SEASON_END,
+    DEFAULT_POOL_SEASON_START,
+    is_valid_month_day,
+)
 
 
 def _entity_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
     d = defaults or {}
-    return vol.Schema(
-        {
-            vol.Required(
-                CONF_SOLAR_POWER_ENTITY,
-                default=d.get(CONF_SOLAR_POWER_ENTITY, "sensor.sungrow_modbus_solar_power"),
-            ): EntitySelector(EntitySelectorConfig(domain="sensor")),
-            vol.Required(
-                CONF_LOAD_POWER_ENTITY,
-                default=d.get(CONF_LOAD_POWER_ENTITY, "sensor.sungrow_modbus_load_power"),
-            ): EntitySelector(EntitySelectorConfig(domain="sensor")),
-            vol.Required(
-                CONF_GRID_POWER_ENTITY,
-                default=d.get(CONF_GRID_POWER_ENTITY, "sensor.sungrow_modbus_grid_power"),
-            ): EntitySelector(EntitySelectorConfig(domain="sensor")),
-            vol.Optional(
-                CONF_BATTERY_POWER_ENTITY,
-                default=d.get(CONF_BATTERY_POWER_ENTITY, "sensor.sungrow_modbus_battery_power"),
-            ): EntitySelector(EntitySelectorConfig(domain="sensor")),
-            vol.Optional(
-                CONF_BATTERY_SOC_ENTITY,
-                default=d.get(CONF_BATTERY_SOC_ENTITY, "sensor.sungrow_modbus_battery_level"),
-            ): EntitySelector(EntitySelectorConfig(domain="sensor")),
-            vol.Optional(
-                CONF_CLOUD_PV_POWER_ENTITY,
-                default=d.get(CONF_CLOUD_PV_POWER_ENTITY, ""),
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
-            vol.Optional(
-                CONF_CLOUD_GRID_POWER_ENTITY,
-                default=d.get(CONF_CLOUD_GRID_POWER_ENTITY, ""),
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
-            vol.Optional(
-                CONF_CLOUD_BATTERY_POWER_ENTITY,
-                default=d.get(CONF_CLOUD_BATTERY_POWER_ENTITY, ""),
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
-            vol.Optional(
-                CONF_CLOUD_BATTERY_SOC_ENTITY,
-                default=d.get(CONF_CLOUD_BATTERY_SOC_ENTITY, ""),
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
-            vol.Optional(
-                CONF_EV_CONNECTED_ENTITY,
-                default=d.get(CONF_EV_CONNECTED_ENTITY, ""),
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
-            vol.Optional(
-                CONF_EV_CHARGING_ENTITY,
-                default=d.get(CONF_EV_CHARGING_ENTITY, ""),
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
-            vol.Optional(
-                CONF_EV_POWER_ENTITY,
-                default=d.get(CONF_EV_POWER_ENTITY, ""),
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
-            vol.Optional(
-                CONF_EV_CURRENT_ENTITY,
-                default=d.get(CONF_EV_CURRENT_ENTITY, ""),
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
-            vol.Optional(
-                CONF_EV_MIN_CURRENT_ENTITY,
-                default=d.get(CONF_EV_MIN_CURRENT_ENTITY, ""),
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
-            vol.Optional(
-                CONF_EV_MODE_ENTITY,
-                default=d.get(CONF_EV_MODE_ENTITY, ""),
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
-            vol.Optional(
-                CONF_EV_SOC_ENTITY,
-                default=d.get(CONF_EV_SOC_ENTITY, ""),
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
-            vol.Optional(
-                CONF_EV_MODE_SERVICE,
-                default=d.get(CONF_EV_MODE_SERVICE, ""),
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
-            vol.Optional(
-                CONF_HEATER_SWITCH_ENTITY,
-                default=d.get(CONF_HEATER_SWITCH_ENTITY, ""),
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
-            vol.Optional(
-                CONF_HEATER_TEMP_ENTITY,
-                default=d.get(CONF_HEATER_TEMP_ENTITY, ""),
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
-            vol.Optional(
-                CONF_HEATER_POWER_ENTITY,
-                default=d.get(CONF_HEATER_POWER_ENTITY, ""),
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
-            vol.Optional(
-                CONF_POOL_SWITCH_ENTITY,
-                default=d.get(CONF_POOL_SWITCH_ENTITY, ""),
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
-            vol.Optional(
-                CONF_POOL_POWER_ENTITY,
-                default=d.get(CONF_POOL_POWER_ENTITY, ""),
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
-        }
+    fields = {
+        vol.Required(key, default=d.get(key, default)): EntitySelector(
+            EntitySelectorConfig(domain="sensor")
+        )
+        for key, default in (
+            (CONF_SOLAR_POWER_ENTITY, "sensor.sungrow_modbus_solar_power"),
+            (CONF_LOAD_POWER_ENTITY, "sensor.sungrow_modbus_load_power"),
+            (CONF_GRID_POWER_ENTITY, "sensor.sungrow_modbus_grid_power"),
+        )
+    }
+    for key, domains in (
+        (CONF_BATTERY_POWER_ENTITY, "sensor"),
+        (CONF_BATTERY_SOC_ENTITY, "sensor"),
+        (CONF_CLOUD_PV_POWER_ENTITY, "sensor"),
+        (CONF_CLOUD_GRID_POWER_ENTITY, "sensor"),
+        (CONF_CLOUD_BATTERY_POWER_ENTITY, "sensor"),
+        (CONF_CLOUD_BATTERY_SOC_ENTITY, "sensor"),
+        (CONF_EV_CONNECTED_ENTITY, None),
+        (CONF_EV_CHARGING_ENTITY, None),
+        (CONF_EV_POWER_ENTITY, "sensor"),
+        (CONF_EV_CURRENT_ENTITY, None),
+        (CONF_EV_MIN_CURRENT_ENTITY, "number"),
+        (CONF_EV_MODE_ENTITY, None),
+        (CONF_EV_SOC_ENTITY, "sensor"),
+        (CONF_HEATER_SWITCH_ENTITY, "switch"),
+        (CONF_HEATER_TEMP_ENTITY, "sensor"),
+        (CONF_HEATER_POWER_ENTITY, "sensor"),
+        (CONF_POOL_SWITCH_ENTITY, "switch"),
+        (CONF_POOL_POWER_ENTITY, "sensor"),
+        (CONF_TARIFF_PRICE_ENTITY, "sensor"),
+        (CONF_SOLAR_FORECAST_ENTITY, "sensor"),
+        (CONF_HEATER_FLOW_ENTITY, "sensor"),
+        (CONF_HEATER_DAILY_WATER_ENTITY, "sensor"),
+        (CONF_EV_TRACKER_ENTITY, ["person", "device_tracker"]),
+        (CONF_WEATHER_ENTITY, "weather"),
+        (CONF_CLIMATE_ENTITY, "climate"),
+    ):
+        marker = vol.Optional(key)
+        if d.get(key):
+            marker.description = {"suggested_value": d[key]}
+        fields[marker] = EntitySelector(EntitySelectorConfig(domain=domains) if domains else {})
+    fields[vol.Optional(CONF_EV_MODE_SERVICE, default=d.get(CONF_EV_MODE_SERVICE, ""))] = (
+        TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT))
     )
+    return vol.Schema(fields)
 
 
 class SolarOrchestratorConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -203,6 +173,9 @@ class SolarOrchestratorConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_POOL_COOLDOWN_MINUTES: DEFAULT_POOL_COOLDOWN_MINUTES,
                     CONF_IMPORT_SHED_THRESHOLD_W: DEFAULT_IMPORT_SHED_THRESHOLD_W,
                     CONF_BATTERY_SLACK_W: DEFAULT_BATTERY_SLACK_W,
+                    CONF_POOL_SEASON_ENABLED: True,
+                    CONF_POOL_SEASON_START: DEFAULT_POOL_SEASON_START,
+                    CONF_POOL_SEASON_END: DEFAULT_POOL_SEASON_END,
                 },
             )
         return self.async_show_form(step_id="user", data_schema=_entity_schema())
@@ -214,9 +187,11 @@ class SolarOrchestratorConfigFlow(ConfigFlow, domain=DOMAIN):
         """Handle entity mapping reconfiguration in place."""
         reconfigure_entry = self._get_reconfigure_entry()
         if user_input is not None:
+            mapped = _entity_schema().schema
             return self.async_update_reload_and_abort(
                 reconfigure_entry,
-                data_updates=user_input,
+                data={k: v for k, v in reconfigure_entry.data.items() if k not in mapped}
+                | user_input,
             )
         return self.async_show_form(
             step_id="reconfigure",
@@ -238,15 +213,27 @@ class SolarOrchestratorOptionsFlow(OptionsFlow):
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
         """Manage orchestrator thresholds."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            for key in (CONF_POOL_SEASON_START, CONF_POOL_SEASON_END):
+                val = user_input.get(key)
+                if not is_valid_month_day(val):
+                    errors[key] = "invalid_month_day"
+            if not errors:
+                cleaned = dict(user_input)
+                cleaned[CONF_POOL_SEASON_START] = str(cleaned[CONF_POOL_SEASON_START]).strip()
+                cleaned[CONF_POOL_SEASON_END] = str(cleaned[CONF_POOL_SEASON_END]).strip()
+                return self.async_create_entry(
+                    title="", data={**self.config_entry.options, **cleaned}
+                )
 
         opts = self.config_entry.options
+        src = user_input if user_input is not None else opts
         schema = vol.Schema(
             {
                 vol.Required(
                     CONF_EVAL_INTERVAL_SECONDS,
-                    default=opts.get(CONF_EVAL_INTERVAL_SECONDS, DEFAULT_EVAL_INTERVAL_SECONDS),
+                    default=src.get(CONF_EVAL_INTERVAL_SECONDS, DEFAULT_EVAL_INTERVAL_SECONDS),
                 ): NumberSelector(
                     NumberSelectorConfig(
                         min=5, max=60, step=1, mode=NumberSelectorMode.BOX, unit_of_measurement="s"
@@ -254,7 +241,7 @@ class SolarOrchestratorOptionsFlow(OptionsFlow):
                 ),
                 vol.Required(
                     CONF_STALE_TIMEOUT_SECONDS,
-                    default=opts.get(CONF_STALE_TIMEOUT_SECONDS, DEFAULT_STALE_TIMEOUT_SECONDS),
+                    default=src.get(CONF_STALE_TIMEOUT_SECONDS, DEFAULT_STALE_TIMEOUT_SECONDS),
                 ): NumberSelector(
                     NumberSelectorConfig(
                         min=15,
@@ -266,7 +253,7 @@ class SolarOrchestratorOptionsFlow(OptionsFlow):
                 ),
                 vol.Required(
                     CONF_HEATER_START_EXPORT_W,
-                    default=opts.get(CONF_HEATER_START_EXPORT_W, DEFAULT_HEATER_START_EXPORT_W),
+                    default=src.get(CONF_HEATER_START_EXPORT_W, DEFAULT_HEATER_START_EXPORT_W),
                 ): NumberSelector(
                     NumberSelectorConfig(
                         min=500,
@@ -278,7 +265,7 @@ class SolarOrchestratorOptionsFlow(OptionsFlow):
                 ),
                 vol.Required(
                     CONF_POOL_START_EXPORT_W,
-                    default=opts.get(CONF_POOL_START_EXPORT_W, DEFAULT_POOL_START_EXPORT_W),
+                    default=src.get(CONF_POOL_START_EXPORT_W, DEFAULT_POOL_START_EXPORT_W),
                 ): NumberSelector(
                     NumberSelectorConfig(
                         min=300,
@@ -290,7 +277,7 @@ class SolarOrchestratorOptionsFlow(OptionsFlow):
                 ),
                 vol.Required(
                     CONF_IMPORT_SHED_THRESHOLD_W,
-                    default=opts.get(CONF_IMPORT_SHED_THRESHOLD_W, DEFAULT_IMPORT_SHED_THRESHOLD_W),
+                    default=src.get(CONF_IMPORT_SHED_THRESHOLD_W, DEFAULT_IMPORT_SHED_THRESHOLD_W),
                 ): NumberSelector(
                     NumberSelectorConfig(
                         min=100,
@@ -300,6 +287,18 @@ class SolarOrchestratorOptionsFlow(OptionsFlow):
                         unit_of_measurement="W",
                     )
                 ),
+                vol.Required(
+                    CONF_POOL_SEASON_ENABLED,
+                    default=bool(src.get(CONF_POOL_SEASON_ENABLED, DEFAULT_POOL_SEASON_ENABLED)),
+                ): BooleanSelector(),
+                vol.Required(
+                    CONF_POOL_SEASON_START,
+                    default=str(src.get(CONF_POOL_SEASON_START, DEFAULT_POOL_SEASON_START)),
+                ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
+                vol.Required(
+                    CONF_POOL_SEASON_END,
+                    default=str(src.get(CONF_POOL_SEASON_END, DEFAULT_POOL_SEASON_END)),
+                ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
             }
         )
-        return self.async_show_form(step_id="init", data_schema=schema)
+        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)

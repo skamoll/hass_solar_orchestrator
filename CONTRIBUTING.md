@@ -3,9 +3,9 @@
 ## Development Setup
 
 ```bash
-python -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install ".[dev]"
 ruff check .
 ruff format --check .
 pytest -v

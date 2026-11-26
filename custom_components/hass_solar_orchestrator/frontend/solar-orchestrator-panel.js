@@ -5,18 +5,36 @@ class SolarOrchestratorPanel extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this._hass = null;
     this._snapshot = null;
+    this._selectedEntryId = null;
+    this._entryEpoch = 0;
     this._scan = null;
     this._tab = window.location.hash === "#config" ? "config" : "status";
     this._draft = {};
     this._dirty = false;
     this._rafPending = false;
+    this._rafId = null;
     this._mounted = false;
     this._timer = null;
+    this._toastTimer = null;
+    this._inFlightSnapshot = false;
+    this._inFlightBlackbox = false;
     this._bbFilterEquip = "";
     this._bbFilterType = "";
     this._bbOpen = false;
     this._advOpen = false;
     this._alertsOpen = false;
+    this._onHashChange = () => {
+      const nextTab = window.location.hash === "#config" ? "config" : "status";
+      if (nextTab !== this._tab) {
+        this._tab = nextTab;
+        this._schedulePatch();
+      }
+    };
+    this._onVisibilityChange = () => {
+      if (!document.hidden && this.isConnected) {
+        this._fetchSnapshot();
+      }
+    };
   }
 
   connectedCallback() {
@@ -24,23 +42,91 @@ class SolarOrchestratorPanel extends HTMLElement {
       this._mountOnce();
       this._mounted = true;
     }
+    window.addEventListener("hashchange", this._onHashChange);
+    document.addEventListener("visibilitychange", this._onVisibilityChange);
+    if (this._timer) {
+      window.clearInterval(this._timer);
+    }
     this._fetchSnapshot();
-    this._timer = window.setInterval(() => this._fetchSnapshot(), 5000);
+    this._timer = window.setInterval(() => {
+      if (!document.hidden) this._fetchSnapshot();
+    }, 5000);
   }
 
   disconnectedCallback() {
+    window.removeEventListener("hashchange", this._onHashChange);
+    document.removeEventListener("visibilitychange", this._onVisibilityChange);
     if (this._timer) {
       window.clearInterval(this._timer);
       this._timer = null;
+    }
+    if (this._rafId !== null) {
+      window.cancelAnimationFrame(this._rafId);
+      this._rafId = null;
+      this._rafPending = false;
+    }
+    if (this._toastTimer) {
+      window.clearTimeout(this._toastTimer);
+      this._toastTimer = null;
     }
   }
 
   set hass(value) {
     const first = !this._hass;
+    const prevAdmin = this._hass?.user?.is_admin;
     this._hass = value;
     if (first && this.isConnected) {
       this._fetchSnapshot();
+    } else if (prevAdmin !== value?.user?.is_admin && this._snapshot) {
+      this._schedulePatch();
     }
+  }
+
+  _esc(val) {
+    return String(val ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  _isAdmin() {
+    return this._hass?.user?.is_admin === true;
+  }
+
+  _isEn() {
+    return String(this._hass?.language || "").toLowerCase().startsWith("en");
+  }
+
+  _selectEntry(nextEntryId) {
+    if (!nextEntryId || nextEntryId === this._selectedEntryId) return;
+    this._entryEpoch += 1;
+    this._selectedEntryId = nextEntryId;
+    this._draft = {};
+    this._dirty = false;
+    this._scan = null;
+    this._snapshot = null;
+    this._inFlightSnapshot = false;
+    this._inFlightBlackbox = false;
+    const q = (id) => this.shadowRoot?.getElementById(id);
+    if (q("dirty-bar")) q("dirty-bar").hidden = true;
+    if (q("scan-results")) {
+      q("scan-results").textContent = "Pulsa Escanear para comprobar tus entidades en vivo.";
+    }
+    if (q("bb-list")) q("bb-list").innerHTML = "";
+    if (q("st-headline")) q("st-headline").textContent = "Cargando...";
+    this._fetchSnapshot(true);
+    if (this._bbOpen) this._refreshBlackbox();
+  }
+
+  _formatError(err) {
+    const code = err?.code || "";
+    const msg = err?.message || String(err || "Error desconocido");
+    if (code === "unauthorized" || /unauthorized/i.test(msg)) {
+      return "Permisos insuficientes: se requiere usuario administrador.";
+    }
+    return msg;
   }
 
   _fmtW(val) {
@@ -56,36 +142,78 @@ class SolarOrchestratorPanel extends HTMLElement {
     return `hace ${age}s`;
   }
 
-  async _fetchSnapshot() {
-    if (!this._hass) return;
+  async _fetchSnapshot(force = false) {
+    if (!this._hass || (this._inFlightSnapshot && !force)) return;
+    const epoch = this._entryEpoch;
+    const reqEntryId = this._selectedEntryId;
+    this._inFlightSnapshot = true;
     try {
-      this._snapshot = await this._hass.callWS({ type: "hass_solar_orchestrator/snapshot" });
+      const msg = { type: "hass_solar_orchestrator/snapshot" };
+      if (reqEntryId) msg.entry_id = reqEntryId;
+      const res = await this._hass.callWS(msg);
+      if (epoch !== this._entryEpoch) return;
+      if (reqEntryId && res?.entry_id && res.entry_id !== reqEntryId) return;
+      this._snapshot = res;
+      if (this._snapshot?.entry_id) {
+        this._selectedEntryId = this._snapshot.entry_id;
+      }
       this._schedulePatch();
     } catch (err) {
-      this._showToast(`Error leyendo estado: ${err?.message || err}`);
+      if (epoch !== this._entryEpoch) return;
+      const msg = this._formatError(err);
+      if (!this._snapshot) {
+        const hl = this.shadowRoot?.getElementById("st-headline");
+        if (hl) hl.textContent = `Error conectando: ${msg}`;
+      }
+      this._showToast(`Error leyendo estado: ${msg}`);
+    } finally {
+      if (epoch === this._entryEpoch) {
+        this._inFlightSnapshot = false;
+      }
     }
   }
 
   async _callService(service, data) {
-    if (!this._hass) return null;
+    if (!this._hass) return false;
+    if (!this._isAdmin()) {
+      this._showToast("Permisos insuficientes: solo un administrador puede ejecutar esta acción.");
+      return false;
+    }
+    const epoch = this._entryEpoch;
+    const entryId = this._selectedEntryId || this._snapshot?.entry_id;
+    if (this._selectedEntryId && this._snapshot?.entry_id && this._snapshot.entry_id !== this._selectedEntryId) {
+      this._showToast("Cambiando de instancia, espera un momento.");
+      return false;
+    }
     try {
-      const resp = await this._hass.callService("hass_solar_orchestrator", service, data);
-      await this._fetchSnapshot();
-      return resp;
+      const payload = { ...(data || {}) };
+      if (entryId && payload.config_entry_id === undefined) {
+        payload.config_entry_id = entryId;
+      }
+      await this._hass.callService("hass_solar_orchestrator", service, payload);
+      if (epoch === this._entryEpoch) {
+        await this._fetchSnapshot(true);
+      }
+      return true;
     } catch (err) {
-      this._showToast(`Error en ${service}: ${err?.message || err}`);
-      return null;
+      this._showToast(`Error en ${service}: ${this._formatError(err)}`);
+      return false;
     }
   }
 
   _showToast(msg) {
     const el = this.shadowRoot.getElementById("so-toast");
     if (!el) return;
+    if (this._toastTimer) {
+      window.clearTimeout(this._toastTimer);
+      this._toastTimer = null;
+    }
     el.textContent = msg;
     el.style.display = msg ? "block" : "none";
     if (msg) {
-      window.setTimeout(() => {
+      this._toastTimer = window.setTimeout(() => {
         if (el) el.style.display = "none";
+        this._toastTimer = null;
       }, 4500);
     }
   }
@@ -191,6 +319,7 @@ class SolarOrchestratorPanel extends HTMLElement {
       <div class="header">
         <div class="brand">
           <span>☀️ Solar Orchestrator</span>
+          <select id="sel-entry" aria-label="Instancia de Solar Orchestrator" hidden></select>
           <span class="pill shadow" id="hdr-tl">SHADOW</span>
           <span class="pill" id="hdr-mode">🛡️ MODO SOMBRA</span>
         </div>
@@ -199,11 +328,11 @@ class SolarOrchestratorPanel extends HTMLElement {
             <div class="muted" id="hdr-icp-txt">Margen ICP: —</div>
             <div class="icp-bar"><div class="icp-fill" id="hdr-icp-bar" style="width:0%"></div></div>
           </div>
-          <button class="btn danger" id="btn-manual-total">⏸ Manual total (1h)</button>
-          <button class="btn" id="btn-alerts">🔔 <span id="hdr-alert-cnt">0</span></button>
+          <button type="button" class="btn danger" id="btn-manual-total">⏸ Manual total (1h)</button>
+          <button type="button" class="btn" id="btn-alerts" aria-expanded="false" title="Ver alertas activas">🔔 <span id="hdr-alert-cnt">0</span></button>
           <div class="tabs">
-            <button class="tab-btn active" id="tab-btn-status">📊 Estado General</button>
-            <button class="tab-btn" id="tab-btn-config">⚙️ Configuración</button>
+            <button type="button" class="tab-btn active" id="tab-btn-status">📊 Estado General</button>
+            <button type="button" class="tab-btn" id="tab-btn-config">⚙️ Configuración</button>
           </div>
         </div>
       </div>
@@ -228,10 +357,12 @@ class SolarOrchestratorPanel extends HTMLElement {
               <div class="row">
                 <span class="pill optimal" id="st-washer" hidden></span>
                 <span class="pill warning" id="st-storm" hidden>⛈️ Temporal en camino</span>
+                <span class="pill warning" id="st-telemetry-status" hidden></span>
               </div>
             </div>
             <div class="muted" id="st-bat-advice" style="margin-top:6px" hidden></div>
             <div class="muted" id="st-climate-advice" style="margin-top:4px" hidden></div>
+            <div class="muted" id="st-weather-error" style="margin-top:4px" hidden></div>
           </div>
 
           <div class="card c12" id="byd-nag-banner" style="border-color:#ffa726;background:rgba(255,152,0,0.1)" hidden>
@@ -303,6 +434,7 @@ class SolarOrchestratorPanel extends HTMLElement {
               <span class="pill" id="badge-pool-mode">observing</span>
             </div>
             <div class="icp-bar" style="width:100%;margin:8px 0"><div class="icp-fill" id="pool-bar" style="width:0%"></div></div>
+            <div class="muted" id="val-pool-season" style="margin-bottom:6px" hidden></div>
             <div class="row">
               <div class="muted">Ahorro hoy / mes: <strong id="val-savings">—</strong></div>
               <div class="muted">Nubes hoy: <span id="val-cloud-pocket">0.00</span> / 0.50 kWh</div>
@@ -334,14 +466,14 @@ class SolarOrchestratorPanel extends HTMLElement {
             </div>
             <div id="bb-body" hidden style="margin-top:10px">
               <div class="row" style="margin-bottom:8px">
-                <select id="bb-filter-equip">
+                <select id="bb-filter-equip" aria-label="Filtrar caja negra por equipo">
                   <option value="">Todos los equipos</option>
                   <option value="heater">Termo</option>
                   <option value="ev">VE / BYD</option>
                   <option value="pool">Depuradora</option>
                   <option value="system">Sistema</option>
                 </select>
-                <select id="bb-filter-type">
+                <select id="bb-filter-type" aria-label="Filtrar caja negra por tipo">
                   <option value="">Todos los tipos</option>
                   <option value="simulated">Simulado (Sombra)</option>
                   <option value="action">Acción real</option>
@@ -358,11 +490,14 @@ class SolarOrchestratorPanel extends HTMLElement {
 
       <div class="wrap" id="view-config" hidden>
         <div class="grid">
+          <div class="card c12" id="config-readonly-banner" hidden style="border-color:#ffa726;background:rgba(255,152,0,0.1)">
+            🔒 <strong>Modo solo lectura:</strong> se requieren permisos de administrador en Home Assistant para modificar la configuración o escanear entidades.
+          </div>
           <div class="card c6">
             <h3>🎛️ Activación granular por carga (V3-M10) <span class="help-tip" title="Cada carga arranca en Observación (0 escrituras). Si hay automatizaciones antiguas activas en HA, el paso a Activo queda bloqueado.">?</span></h3>
             <div id="granular-loads-list"></div>
             <div class="field" style="margin-top:10px">
-              <label>Modo global del árbitro</label>
+              <label for="sel-global-mode">Modo global del árbitro</label>
               <select id="sel-global-mode">
                 <option value="observing">🛡️ Modo Sombra (observing)</option>
                 <option value="auto_solar">☀️ Auto Solar</option>
@@ -383,32 +518,35 @@ class SolarOrchestratorPanel extends HTMLElement {
           <div class="card c6">
             <h3>💶 Tarifas y Potencia Contratada <span class="help-tip" title="El margen ICP evita saltos del contador manteniendo reserva doméstica.">?</span></h3>
             <div class="form-grid">
-              <div class="field"><label>Potencia contratada (W)</label><input id="inp-contracted" data-cfg="contracted_power_w" type="number" min="1000" step="250"></div>
-              <div class="field"><label>Margen ICP (W)</label><input id="inp-icp-margin" data-cfg="icp_margin_w" type="number" min="100" step="50"></div>
-              <div class="field"><label>Modo tarifa</label>
+              <div class="field"><label for="inp-contracted">Potencia contratada (W)</label><input id="inp-contracted" data-cfg="contracted_power_w" type="number" min="1000" step="250"></div>
+              <div class="field"><label for="inp-icp-margin">Margen ICP (W)</label><input id="inp-icp-margin" data-cfg="icp_margin_w" type="number" min="100" step="50"></div>
+              <div class="field"><label for="sel-tariff-mode">Modo tarifa</label>
                 <select id="sel-tariff-mode" data-cfg="tariff_mode">
                   <option value="manual_20td">Manual 2.0TD (P1/P2/P3)</option>
                   <option value="sensor">Sensor HA (PVPC/ESIOS)</option>
                   <option value="conservative">Conservador</option>
                 </select>
               </div>
-              <div class="field"><label>P1 (€/kWh)</label><input id="inp-p1" data-cfg="tariff_p1_eur" type="number" step="0.01"></div>
-              <div class="field"><label>P2 (€/kWh)</label><input id="inp-p2" data-cfg="tariff_p2_eur" type="number" step="0.01"></div>
-              <div class="field"><label>P3 (€/kWh)</label><input id="inp-p3" data-cfg="tariff_p3_eur" type="number" step="0.01"></div>
+              <div class="field"><label for="inp-p1">P1 (€/kWh)</label><input id="inp-p1" data-cfg="tariff_p1_eur" type="number" min="0" step="0.001"></div>
+              <div class="field"><label for="inp-p2">P2 (€/kWh)</label><input id="inp-p2" data-cfg="tariff_p2_eur" type="number" min="0" step="0.001"></div>
+              <div class="field"><label for="inp-p3">P3 (€/kWh)</label><input id="inp-p3" data-cfg="tariff_p3_eur" type="number" min="0" step="0.001"></div>
             </div>
           </div>
 
           <div class="card c6">
             <div class="row">
               <h3>🔧 Opciones avanzadas</h3>
-              <button class="btn" id="btn-toggle-adv">Mostrar / Ocultar</button>
+              <button type="button" class="btn" id="btn-toggle-adv">Mostrar / Ocultar</button>
             </div>
             <div id="adv-body" hidden style="margin-top:10px">
               <div class="form-grid">
-                <div class="field"><label>Suelo batería casa (%)</label><input id="inp-soc-floor" data-cfg="house_soc_floor" type="number" min="10" max="90"></div>
-                <div class="field"><label>Amperios máx VE (A)</label><input id="inp-ev-max" data-cfg="ev_max_amps" type="number" min="6" max="32"></div>
-                <div class="field"><label>Temp objetivo termo (°C)</label><input id="inp-heater-temp" data-cfg="heater_target_temp_c" type="number" min="30" max="75"></div>
-                <div class="field"><label>Cuota depuradora (min/día)</label><input id="inp-pool-max" data-cfg="pool_daily_max_minutes" type="number" min="30" max="720"></div>
+                <div class="field"><label for="inp-soc-floor">Suelo batería casa (%)</label><input id="inp-soc-floor" data-cfg="house_soc_floor" type="number" min="10" max="90"></div>
+                <div class="field"><label for="inp-ev-max">Amperios máx VE (A)</label><input id="inp-ev-max" data-cfg="ev_max_amps" type="number" min="6" max="32"></div>
+                <div class="field"><label for="inp-heater-temp">Temp objetivo termo (°C)</label><input id="inp-heater-temp" data-cfg="heater_target_temp_c" type="number" min="30" max="75"></div>
+                <div class="field"><label for="inp-pool-max">Cuota depuradora (min/día)</label><input id="inp-pool-max" data-cfg="pool_daily_max_minutes" type="number" min="30" max="720"></div>
+                <div class="field"><label for="inp-pool-season-enabled">Limitar depuradora por temporada</label><input id="inp-pool-season-enabled" data-cfg="pool_season_enabled" type="checkbox"></div>
+                <div class="field"><label for="inp-pool-season-start">Inicio temporada (MM-DD)</label><input id="inp-pool-season-start" data-cfg="pool_season_start" type="text" placeholder="05-01"></div>
+                <div class="field"><label for="inp-pool-season-end">Fin temporada (MM-DD)</label><input id="inp-pool-season-end" data-cfg="pool_season_end" type="text" placeholder="09-30"></div>
               </div>
             </div>
           </div>
@@ -424,13 +562,16 @@ class SolarOrchestratorPanel extends HTMLElement {
           </div>
         </div>
       </div>
-      <div id="so-toast"></div>
+      <div id="so-toast" role="status" aria-live="polite"></div>
     `;
     this._bindStaticEvents();
   }
 
   _bindStaticEvents() {
     const q = (id) => this.shadowRoot.getElementById(id);
+    q("sel-entry").addEventListener("change", (e) => {
+      this._selectEntry(e.target.value);
+    });
     q("tab-btn-status").addEventListener("click", () => {
       this._tab = "status";
       window.location.hash = "estado";
@@ -441,17 +582,17 @@ class SolarOrchestratorPanel extends HTMLElement {
       window.location.hash = "config";
       this._schedulePatch();
     });
-    q("btn-manual-total").addEventListener("click", () => {
-      this._callService("set_mode", { mode: "manual_total", duration_minutes: 60 });
-      this._showToast("Manual total activado (1h). Volverá a Modo Sombra al vencer.");
+    q("btn-manual-total").addEventListener("click", async () => {
+      const ok = await this._callService("set_mode", { mode: "manual_total", duration_minutes: 60 });
+      if (ok) this._showToast("Manual total activado (1h). Volverá a Modo Sombra al vencer.");
     });
     q("btn-alerts").addEventListener("click", () => {
       this._alertsOpen = !this._alertsOpen;
       this._schedulePatch();
     });
-    q("btn-extra-shower").addEventListener("click", () => {
-      this._callService("extra_shower_today", {});
-      this._showToast("Ducha extra activada hasta medianoche.");
+    q("btn-extra-shower").addEventListener("click", async () => {
+      const ok = await this._callService("extra_shower_today", {});
+      if (ok) this._showToast("Ducha extra activada hasta medianoche.");
     });
     q("btn-termo-auto").addEventListener("click", () => {
       this._callService("override_load", { load_id: "heater", action: "auto" });
@@ -462,9 +603,9 @@ class SolarOrchestratorPanel extends HTMLElement {
     q("btn-ev-auto").addEventListener("click", () => {
       this._callService("override_load", { load_id: "ev", action: "auto" });
     });
-    q("btn-mute-byd").addEventListener("click", () => {
-      this._callService("mute_ev_nag_today", {});
-      this._showToast("Aviso BYD silenciado hasta medianoche.");
+    q("btn-mute-byd").addEventListener("click", async () => {
+      const ok = await this._callService("mute_ev_nag_today", {});
+      if (ok) this._showToast("Aviso BYD silenciado hasta medianoche.");
     });
     q("btn-bb-toggle").addEventListener("click", () => {
       this._bbOpen = !this._bbOpen;
@@ -481,34 +622,82 @@ class SolarOrchestratorPanel extends HTMLElement {
     });
     q("btn-bb-download").addEventListener("click", async () => {
       if (!this._hass) return;
-      const res = await this._hass.callWS({
-        type: "hass_solar_orchestrator/blackbox",
-        equipment: this._bbFilterEquip || undefined,
-        event_type: this._bbFilterType || undefined,
-        collapse: false,
-      });
-      const blob = new Blob([JSON.stringify(res.entries || [], null, 2)], { type: "application/json" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = `solar-orchestrator-blackbox-${new Date().toISOString().slice(0, 10)}.json`;
-      a.click();
+      try {
+        const res = await this._hass.callWS({
+          type: "hass_solar_orchestrator/blackbox",
+          entry_id: this._selectedEntryId || this._snapshot?.entry_id || undefined,
+          equipment: this._bbFilterEquip || undefined,
+          event_type: this._bbFilterType || undefined,
+          collapse: false,
+        });
+        const blob = new Blob([JSON.stringify(res.entries || [], null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `solar-orchestrator-blackbox-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (err) {
+        this._showToast(`Error descargando Caja Negra: ${this._formatError(err)}`);
+      }
     });
-    q("sel-global-mode").addEventListener("change", (e) => {
-      this._callService("set_mode", { mode: e.target.value, duration_minutes: 60 });
+    q("sel-global-mode").addEventListener("change", async (e) => {
+      const ok = await this._callService("set_mode", { mode: e.target.value, duration_minutes: 60 });
+      if (!ok && this._snapshot?.mode) {
+        e.target.value = this._snapshot.mode;
+      }
     });
     q("btn-scan-entities").addEventListener("click", async () => {
       if (!this._hass) return;
-      this._scan = await this._hass.callWS({ type: "hass_solar_orchestrator/entities_scan" });
-      this._renderScan();
+      if (!this._isAdmin()) {
+        this._showToast("Permisos insuficientes: se requiere usuario administrador.");
+        return;
+      }
+      const btn = q("btn-scan-entities");
+      const epoch = this._entryEpoch;
+      const entryId = this._selectedEntryId || this._snapshot?.entry_id || undefined;
+      btn.disabled = true;
+      btn.textContent = "⏳ Escaneando...";
+      try {
+        const scan = await this._hass.callWS({
+          type: "hass_solar_orchestrator/entities_scan",
+          entry_id: entryId,
+        });
+        if (epoch !== this._entryEpoch) return;
+        this._scan = scan;
+        this._renderScan();
+      } catch (err) {
+        if (epoch === this._entryEpoch) {
+          this._showToast(`Error escaneando entidades: ${this._formatError(err)}`);
+        }
+      } finally {
+        btn.disabled = !this._isAdmin();
+        btn.textContent = "🔍 Escanear entidades HA";
+      }
     });
     q("btn-toggle-adv").addEventListener("click", () => {
       this._advOpen = !this._advOpen;
       q("adv-body").hidden = !this._advOpen;
     });
     this.shadowRoot.querySelectorAll("[data-cfg]").forEach((el) => {
-      el.addEventListener("input", (e) => {
+      const evName = el.type === "checkbox" ? "change" : "input";
+      el.addEventListener(evName, (e) => {
         const key = e.target.dataset.cfg;
-        this._draft[key] = e.target.type === "number" ? Number(e.target.value) : e.target.value;
+        if (e.target.type === "checkbox") {
+          this._draft[key] = Boolean(e.target.checked);
+        } else if (e.target.type === "number") {
+          const raw = e.target.value.trim();
+          const num = Number(raw);
+          if (raw === "" || !Number.isFinite(num)) {
+            delete this._draft[key];
+            this._dirty = Object.keys(this._draft).length > 0;
+            q("dirty-bar").hidden = !this._dirty;
+            return;
+          }
+          this._draft[key] = num;
+        } else {
+          this._draft[key] = e.target.value;
+        }
         this._dirty = true;
         q("dirty-bar").hidden = false;
       });
@@ -521,41 +710,77 @@ class SolarOrchestratorPanel extends HTMLElement {
     });
     q("btn-save-draft").addEventListener("click", async () => {
       const data = { ...this._draft };
-      this._draft = {};
-      this._dirty = false;
-      q("dirty-bar").hidden = true;
-      await this._callService("save_settings", { data });
-      this._showToast("Configuración guardada.");
+      if (!Object.keys(data).length) {
+        this._dirty = false;
+        q("dirty-bar").hidden = true;
+        return;
+      }
+      const btn = q("btn-save-draft");
+      btn.disabled = true;
+      try {
+        const ok = await this._callService("save_settings", { data });
+        if (ok) {
+          this._draft = {};
+          this._dirty = false;
+          q("dirty-bar").hidden = true;
+          this._showToast("Configuración guardada.");
+        }
+      } finally {
+        btn.disabled = !this._isAdmin();
+      }
     });
   }
 
   async _refreshBlackbox() {
-    if (!this._hass) return;
-    const res = await this._hass.callWS({
-      type: "hass_solar_orchestrator/blackbox",
-      equipment: this._bbFilterEquip || undefined,
-      event_type: this._bbFilterType || undefined,
-      collapse: true,
-    });
-    const list = this.shadowRoot.getElementById("bb-list");
-    if (!list) return;
-    const entries = res.entries || [];
-    list.innerHTML = entries
-      .map(
-        (b) =>
-          `<div class="bb-item">[${(b.ts || "").slice(11, 19)}] <strong>${b.type}</strong> (${b.target}) · ${b.message} ${b.count > 1 ? `<span class="pill">×${b.count}</span>` : ""} ${b.executed ? "✅" : "🛡️"}</div>`
-      )
-      .join("");
+    if (!this._hass || this._inFlightBlackbox) return;
+    const epoch = this._entryEpoch;
+    this._inFlightBlackbox = true;
+    try {
+      const res = await this._hass.callWS({
+        type: "hass_solar_orchestrator/blackbox",
+        entry_id: this._selectedEntryId || this._snapshot?.entry_id || undefined,
+        equipment: this._bbFilterEquip || undefined,
+        event_type: this._bbFilterType || undefined,
+        collapse: true,
+      });
+      if (epoch !== this._entryEpoch) return;
+      const list = this.shadowRoot.getElementById("bb-list");
+      if (!list) return;
+      const entries = res.entries || [];
+      if (!entries.length) {
+        list.innerHTML = '<div class="muted">Sin entradas para los filtros actuales.</div>';
+        return;
+      }
+      list.innerHTML = entries
+        .map(
+          (b) =>
+            `<div class="bb-item">[${this._esc((b.ts || "").slice(11, 19))}] <strong>${this._esc(b.type)}</strong> (${this._esc(b.target)}) · ${this._esc(b.message)} ${b.count > 1 ? `<span class="pill">×${Number(b.count)}</span>` : ""} ${b.executed ? "✅" : "🛡️"}</div>`
+        )
+        .join("");
+    } catch (err) {
+      if (epoch === this._entryEpoch) {
+        this._showToast(`Error cargando Caja Negra: ${this._formatError(err)}`);
+      }
+    } finally {
+      if (epoch === this._entryEpoch) {
+        this._inFlightBlackbox = false;
+      }
+    }
   }
 
   _renderScan() {
     const el = this.shadowRoot.getElementById("scan-results");
     if (!el || !this._scan) return;
     const roles = this._scan.roles || {};
-    el.innerHTML = Object.entries(roles)
+    const items = Object.entries(roles);
+    if (!items.length) {
+      el.innerHTML = '<div class="muted">No se encontraron entidades candidatas.</div>';
+      return;
+    }
+    el.innerHTML = items
       .map(([k, v]) => {
         const icon = v.status === "ok" ? "✅" : v.status === "warning" ? "⚠️" : "❌";
-        return `<div class="load-row"><div>${icon} <strong>${k}</strong>: ${v.selected || "No encontrada"}</div><span class="muted">${v.live}</span></div>`;
+        return `<div class="load-row"><div>${icon} <strong>${this._esc(k)}</strong>: ${this._esc(v.selected || "No encontrada")}</div><span class="muted">${this._esc(v.live)}</span></div>`;
       })
       .join("");
   }
@@ -566,8 +791,12 @@ class SolarOrchestratorPanel extends HTMLElement {
       const key = el.dataset.cfg;
       if (!force && (this._dirty || this.shadowRoot.activeElement === el)) return;
       if (key in this._draft && !force) return;
-      if (cfg[key] !== undefined && String(el.value) !== String(cfg[key])) {
-        el.value = cfg[key];
+      if (cfg[key] !== undefined) {
+        if (el.type === "checkbox") {
+          el.checked = Boolean(cfg[key]);
+        } else if (String(el.value) !== String(cfg[key])) {
+          el.value = cfg[key];
+        }
       }
     });
   }
@@ -575,8 +804,9 @@ class SolarOrchestratorPanel extends HTMLElement {
   _schedulePatch() {
     if (this._rafPending) return;
     this._rafPending = true;
-    window.requestAnimationFrame(() => {
+    this._rafId = window.requestAnimationFrame(() => {
       this._rafPending = false;
+      this._rafId = null;
       this._patchDOM();
     });
   }
@@ -586,6 +816,7 @@ class SolarOrchestratorPanel extends HTMLElement {
     if (!d) return;
     const p = d.plan || {};
     const s = d.snapshot || {};
+    const isAdmin = this._isAdmin();
     const q = (id) => this.shadowRoot.getElementById(id);
     const setTxt = (id, v) => {
       const el = q(id);
@@ -598,27 +829,106 @@ class SolarOrchestratorPanel extends HTMLElement {
     q("tab-btn-config").classList.toggle("active", this._tab === "config");
     q("shadow-banner").hidden = d.mode !== "observing";
     q("alerts-drawer").hidden = !this._alertsOpen;
+    q("btn-alerts").setAttribute("aria-expanded", String(this._alertsOpen));
+    q("config-readonly-banner").hidden = isAdmin;
+
+    const entries = d.entries || [];
+    const selEntry = q("sel-entry");
+    if (selEntry) {
+      selEntry.hidden = entries.length <= 1;
+      if (entries.length > 1) {
+        const key = entries.map((e) => `${e.entry_id}:${e.title || e.entry_id}`).join("|");
+        if (selEntry.dataset.key !== key) {
+          selEntry.dataset.key = key;
+          selEntry.innerHTML = entries
+            .map((e) => `<option value="${this._esc(e.entry_id)}">${this._esc(e.title || e.entry_id)}</option>`)
+            .join("");
+        }
+        const activeId = this._selectedEntryId || d.entry_id || "";
+        if (activeId && selEntry.value !== activeId) {
+          selEntry.value = activeId;
+        }
+      }
+    }
 
     const tl = p.traffic_light || "shadow";
     const tlEl = q("hdr-tl");
     tlEl.className = `pill ${tl}`;
     setTxt("hdr-tl", tl.toUpperCase());
-    setTxt("hdr-mode", d.mode === "observing" ? "🛡️ MODO SOMBRA" : d.mode === "manual_total" ? "⏸️ MANUAL TOTAL" : `⚡ ${d.mode.toUpperCase()}`);
+    const manualUntilTxt =
+      d.mode === "manual_total" && d.manual_total_until
+        ? ` (hasta ${String(d.manual_total_until).slice(11, 16)})`
+        : "";
+    setTxt(
+      "hdr-mode",
+      d.mode === "observing"
+        ? "🛡️ MODO SOMBRA"
+        : d.mode === "manual_total"
+        ? `⏸️ MANUAL TOTAL${manualUntilTxt}`
+        : `⚡ ${(d.mode || "").toUpperCase()}`
+    );
     setTxt("hdr-icp-txt", `Margen ICP: ${p.icp_headroom_w !== null && p.icp_headroom_w !== undefined ? this._fmtW(p.icp_headroom_w) : "no disponible"}`);
     const icpPct = p.icp_load_ratio_pct ?? 0;
     const bar = q("hdr-icp-bar");
     bar.style.width = `${Math.min(100, icpPct)}%`;
     bar.className = `icp-fill ${icpPct >= 90 ? "crit" : icpPct >= 75 ? "warn" : ""}`;
-    setTxt("hdr-alert-cnt", (p.alerts || []).length);
+    const alerts = p.alerts || [];
+    setTxt("hdr-alert-cnt", alerts.length);
+    const alertsListEl = q("alerts-list");
+    if (alertsListEl) {
+      alertsListEl.innerHTML = alerts.length
+        ? alerts
+            .map((a) => {
+              const sev = a.severity === "critical" ? "critical" : a.severity === "warning" ? "warning" : "shadow";
+              return `<div class="load-row"><div><span class="pill ${sev}">${this._esc(a.severity || "info")}</span> <strong>${this._esc(a.title || a.alert_id || "Alerta")}</strong><div class="muted">${this._esc(a.detail || "")}</div></div></div>`;
+            })
+            .join("")
+        : '<div class="muted">Sin alertas activas.</div>';
+    }
 
+    const isEn = this._isEn();
     setTxt("st-headline", p.human_headline || "—");
     q("st-washer").hidden = !p.washer_suggestion;
     if (p.washer_suggestion) setTxt("st-washer", `🧺 ${p.washer_suggestion}`);
     q("st-storm").hidden = !p.storm_alert;
+    const telStatus = s.telemetry_status || p.telemetry_status || "ok";
+    const telEl = q("st-telemetry-status");
+    if (telEl) {
+      if (telStatus === "cloud_fallback") {
+        telEl.hidden = false;
+        telEl.className = "pill warning";
+        telEl.textContent = isEn
+          ? "☁️ Cloud fallback: starts blocked"
+          : "☁️ Datos de la nube: arranques bloqueados";
+      } else if (telStatus === "degraded") {
+        telEl.hidden = false;
+        telEl.className = "pill critical";
+        telEl.textContent = isEn
+          ? "⚠️ Degraded telemetry: starts frozen"
+          : "⚠️ Telemetría degradada: arranques congelados";
+      } else {
+        telEl.hidden = true;
+      }
+    }
     q("st-bat-advice").hidden = !p.battery_advice;
     if (p.battery_advice) setTxt("st-bat-advice", `🔋 ${p.battery_advice}`);
     q("st-climate-advice").hidden = !p.climate_advice;
     if (p.climate_advice) setTxt("st-climate-advice", `❄️ ${p.climate_advice}`);
+    const wErrEl = q("st-weather-error");
+    if (wErrEl) {
+      if (s.weather_fetch_failed) {
+        const since = s.weather_last_error_at ? String(s.weather_last_error_at).slice(0, 16).replace("T", " ") : "—";
+        const retry = s.weather_next_retry_at ? String(s.weather_next_retry_at).slice(0, 16).replace("T", " ") : "—";
+        const errTxt = s.weather_last_error ? ` (${s.weather_last_error})` : "";
+        const fails = s.weather_failures || 1;
+        wErrEl.hidden = false;
+        wErrEl.textContent = isEn
+          ? `🌦️ Weather fetch failing (${fails}x) since ${since}, next retry ${retry}${errTxt}`
+          : `🌦️ Previsión meteorológica fallando (${fails}x) desde ${since}, próximo reintento ${retry}${errTxt}`;
+      } else {
+        wErrEl.hidden = true;
+      }
+    }
 
     q("byd-nag-banner").hidden = !p.byd_unplugged_surplus_alert;
     if (p.byd_unplugged_surplus_alert) {
@@ -657,11 +967,36 @@ class SolarOrchestratorPanel extends HTMLElement {
     setTxt("badge-ev-mode", (d.load_modes || {}).ev || "observing");
     setTxt("val-ev-reason", (p.why_by_device || {}).ev || "—");
 
+    const cfg = d.config || {};
+    const poolInSeason = p.pool_in_season !== false && s.pool_in_season !== false;
     setTxt("val-pool-min", s.pool_minutes_today ?? 0);
     setTxt("val-pool-max", s.pool_daily_max_minutes ?? 360);
-    setTxt("badge-pool-mode", (d.load_modes || {}).pool || "observing");
-    const poolPct = Math.min(100, ((s.pool_minutes_today || 0) / Math.max(1, s.pool_daily_max_minutes || 360)) * 100);
+    const poolBadge = q("badge-pool-mode");
+    if (poolBadge) {
+      poolBadge.className = "pill";
+      poolBadge.textContent = !poolInSeason
+        ? isEn
+          ? "out of season"
+          : "fuera de temporada"
+        : (d.load_modes || {}).pool || "observing";
+    }
+    const poolPct = poolInSeason
+      ? Math.min(100, ((s.pool_minutes_today || 0) / Math.max(1, s.pool_daily_max_minutes || 360)) * 100)
+      : 0;
     q("pool-bar").style.width = `${poolPct}%`;
+    const poolSeasonEl = q("val-pool-season");
+    if (poolSeasonEl) {
+      if (!poolInSeason || cfg.pool_season_enabled) {
+        const wStart = cfg.pool_season_start || "05-01";
+        const wEnd = cfg.pool_season_end || "09-30";
+        poolSeasonEl.hidden = false;
+        poolSeasonEl.textContent = isEn
+          ? `Season window: ${wStart} → ${wEnd}`
+          : `Temporada: ${wStart} → ${wEnd}`;
+      } else {
+        poolSeasonEl.hidden = true;
+      }
+    }
 
     const fmtEurPair = (today, month) =>
       today !== null && today !== undefined
@@ -678,24 +1013,29 @@ class SolarOrchestratorPanel extends HTMLElement {
     // Forecast strip
     const fc = s.weather_daily_forecast || [];
     q("fc-strip").innerHTML = fc.length
-      ? fc.map((day) => `<div class="fc-day"><strong>${(day.datetime || "").slice(0, 10)}</strong><div>${day.condition || "—"}</div><div>${day.templow ?? "—"}° / ${day.temperature ?? "—"}°</div></div>`).join("")
+      ? fc
+          .map(
+            (day) =>
+              `<div class="fc-day"><strong>${this._esc((day.datetime || "").slice(0, 10))}</strong><div>${this._esc(day.condition || "—")}</div><div>${this._esc(day.templow ?? "—")}° / ${this._esc(day.temperature ?? "—")}°</div></div>`
+          )
+          .join("")
       : '<div class="muted">Sin previsión diaria cacheada aún.</div>';
 
-    // Granular loads list in Config (only update if not hovering/editing)
+    // Granular loads list in Config (only update if not focused inside)
     const lm = d.load_modes || { pool: "observing", heater: "observing", ev: "observing" };
     const conflicts = d.conflicts || [];
     const glEl = q("granular-loads-list");
-    if (glEl && this.shadowRoot.activeElement?.closest("#granular-loads-list") === null) {
+    if (glEl && !this.shadowRoot.activeElement?.closest("#granular-loads-list")) {
       glEl.innerHTML = ["pool", "heater", "ev"]
         .map((lid) => {
           const mode = lm[lid] || "observing";
           const c = conflicts.find((x) => x.load === lid);
           const label = lid === "pool" ? "Depuradora" : lid === "heater" ? "Termo eléctrico" : "Vehículo eléctrico";
           return `<div class="load-row">
-            <div><strong>${label}</strong>${c ? `<div class="muted">🔒 Conflicto: ${c.entity_id}</div>` : ""}</div>
+            <div><strong>${label}</strong>${c ? `<div class="muted">🔒 Conflicto: ${this._esc(c.entity_id)}</div>` : ""}</div>
             <div class="row">
-              <button class="btn ${mode === "observing" ? "primary" : ""} btn-lm" data-lid="${lid}" data-mode="observing">Observación</button>
-              <button class="btn ${mode === "active" ? "primary" : ""} btn-lm" data-lid="${lid}" data-mode="active" ${c ? "disabled" : ""}>Activo</button>
+              <button type="button" class="btn ${mode === "observing" ? "primary" : ""} btn-lm" data-lid="${lid}" data-mode="observing" ${!isAdmin ? "disabled" : ""}>Observación</button>
+              <button type="button" class="btn ${mode === "active" ? "primary" : ""} btn-lm" data-lid="${lid}" data-mode="active" ${c || !isAdmin ? "disabled" : ""}>Activo</button>
             </div>
           </div>`;
         })
@@ -708,6 +1048,13 @@ class SolarOrchestratorPanel extends HTMLElement {
     if (q("sel-global-mode") && this.shadowRoot.activeElement !== q("sel-global-mode")) {
       q("sel-global-mode").value = d.mode;
     }
+    for (const id of ["btn-manual-total", "btn-extra-shower", "btn-termo-auto", "btn-ev-boost", "btn-ev-auto", "btn-mute-byd", "btn-scan-entities", "sel-global-mode"]) {
+      const el = q(id);
+      if (el) el.disabled = !isAdmin;
+    }
+    this.shadowRoot.querySelectorAll("[data-cfg]").forEach((el) => {
+      el.disabled = !isAdmin;
+    });
     this._syncConfigInputs(false);
     if (this._bbOpen) this._refreshBlackbox();
   }

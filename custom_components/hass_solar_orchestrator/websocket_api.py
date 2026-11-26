@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import math
 from typing import Any
 
 import voluptuous as vol
@@ -11,15 +13,17 @@ from homeassistant.core import HomeAssistant, callback
 from .const import DOMAIN
 from .coordinator import SolarOrchestratorCoordinator
 
+_LOGGER = logging.getLogger(__name__)
+
 
 def _get_coordinator(
     hass: HomeAssistant, entry_id: str | None
 ) -> SolarOrchestratorCoordinator | None:
-    entries: dict[str, SolarOrchestratorCoordinator] = hass.data.get(DOMAIN, {})
-    if not entries:
+    entries = hass.data.get(DOMAIN)
+    if not isinstance(entries, dict) or not entries:
         return None
-    if entry_id and entry_id in entries:
-        return entries[entry_id]
+    if entry_id is not None:
+        return entries.get(entry_id)
     return next(iter(entries.values()))
 
 
@@ -38,7 +42,7 @@ def async_register_websocket_api(hass: HomeAssistant) -> None:
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{DOMAIN}/snapshot",
-        vol.Optional("entry_id"): str,
+        vol.Optional("entry_id"): vol.Any(str, None),
     }
 )
 @callback
@@ -54,7 +58,21 @@ def ws_get_snapshot(
             msg["id"], "not_found", "No hay instancia configurada de Solar Orchestrator"
         )
         return
-    connection.send_result(msg["id"], coord.get_panel_snapshot())
+    try:
+        entries = hass.data.get(DOMAIN, {})
+        entry_list = [
+            {
+                "entry_id": eid,
+                "title": getattr(getattr(c, "entry", None), "title", None) or eid,
+            }
+            for eid, c in entries.items()
+        ]
+        payload = dict(coord.get_panel_snapshot())
+        payload["entries"] = entry_list
+        connection.send_result(msg["id"], payload)
+    except Exception as err:
+        _LOGGER.exception("Error building panel snapshot")
+        connection.send_error(msg["id"], "internal_error", str(err))
 
 
 @websocket_api.websocket_command(
@@ -63,6 +81,7 @@ def ws_get_snapshot(
         vol.Required("entity_id"): str,
     }
 )
+@websocket_api.require_admin
 @callback
 def ws_validate_entity(
     hass: HomeAssistant,
@@ -71,6 +90,19 @@ def ws_validate_entity(
 ) -> None:
     """Inspect a live HA entity for the M09 onboarding sign & unit verifier."""
     entity_id = msg["entity_id"].strip()
+    if not entity_id:
+        connection.send_result(
+            msg["id"],
+            {
+                "entity_id": entity_id,
+                "exists": False,
+                "state": None,
+                "unit": None,
+                "normalized_w": None,
+                "hint": "ID de entidad vacío.",
+            },
+        )
+        return
     st = hass.states.get(entity_id)
     if st is None:
         connection.send_result(
@@ -94,6 +126,8 @@ def ws_validate_entity(
     else:
         try:
             val = float(raw)
+            if not math.isfinite(val):
+                raise ValueError("non-finite")
             normalized_w = val * 1000.0 if unit.lower() == "kw" else val
             if normalized_w < 0:
                 hint = (
@@ -124,9 +158,10 @@ def ws_validate_entity(
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{DOMAIN}/entities_scan",
-        vol.Optional("entry_id"): str,
+        vol.Optional("entry_id"): vol.Any(str, None),
     }
 )
+@websocket_api.require_admin
 @callback
 def ws_entities_scan(
     hass: HomeAssistant,
@@ -138,15 +173,19 @@ def ws_entities_scan(
     if coord is None:
         connection.send_error(msg["id"], "not_found", "No hay instancia configurada")
         return
-    connection.send_result(msg["id"], coord.scan_entities())
+    try:
+        connection.send_result(msg["id"], coord.scan_entities())
+    except Exception as err:
+        _LOGGER.exception("Error scanning entities")
+        connection.send_error(msg["id"], "internal_error", str(err))
 
 
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{DOMAIN}/blackbox",
-        vol.Optional("entry_id"): str,
-        vol.Optional("equipment"): str,
-        vol.Optional("event_type"): str,
+        vol.Optional("entry_id"): vol.Any(str, None),
+        vol.Optional("equipment"): vol.Any(str, None),
+        vol.Optional("event_type"): vol.Any(str, None),
         vol.Optional("collapse", default=True): bool,
     }
 )
@@ -161,9 +200,13 @@ def ws_blackbox(
     if coord is None:
         connection.send_error(msg["id"], "not_found", "No hay instancia configurada")
         return
-    entries = coord.get_filtered_blackbox(
-        equipment=msg.get("equipment") or None,
-        event_type=msg.get("event_type") or None,
-        collapse=bool(msg.get("collapse", True)),
-    )
-    connection.send_result(msg["id"], {"entries": entries})
+    try:
+        entries = coord.get_filtered_blackbox(
+            equipment=msg.get("equipment") or None,
+            event_type=msg.get("event_type") or None,
+            collapse=bool(msg.get("collapse", True)),
+        )
+        connection.send_result(msg["id"], {"entries": entries})
+    except Exception as err:
+        _LOGGER.exception("Error reading blackbox")
+        connection.send_error(msg["id"], "internal_error", str(err))

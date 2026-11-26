@@ -2,6 +2,12 @@ set_mode:
   name: Set operating mode
   description: Switch orchestrator operating mode (observing, active modes, or manual_total with auto-expiry back to observing).
   fields:
+    config_entry_id:
+      name: Integration instance
+      description: Required when multiple instances are loaded.
+      selector:
+        config_entry:
+          integration: hass_solar_orchestrator
     mode:
       name: Mode
       required: true
@@ -28,6 +34,12 @@ apply_profile:
   name: Apply or preview profile
   description: Preview impact or apply a 1-touch energy profile.
   fields:
+    config_entry_id:
+      name: Integration instance
+      description: Required when multiple instances are loaded.
+      selector:
+        config_entry:
+          integration: hass_solar_orchestrator
     profile:
       name: Profile
       required: true
@@ -54,6 +66,12 @@ set_priorities:
   name: Set load priorities
   description: Reorder orchestrable loads keeping house locked at #1.
   fields:
+    config_entry_id:
+      name: Integration instance
+      description: Required when multiple instances are loaded.
+      selector:
+        config_entry:
+          integration: hass_solar_orchestrator
     priority_order:
       name: Priority order
       required: true
@@ -74,6 +92,12 @@ set_ev_commitment:
   name: Set EV departure commitment
   description: Configure target SoC, departure time, and optional valley grid top-up.
   fields:
+    config_entry_id:
+      name: Integration instance
+      description: Required when multiple instances are loaded.
+      selector:
+        config_entry:
+          integration: hass_solar_orchestrator
     target_soc:
       name: Target SoC
       required: true
@@ -102,6 +126,12 @@ override_load:
   name: Override load or boost EV
   description: Apply an expiring 1-touch override to a load or trigger EV Charge Now.
   fields:
+    config_entry_id:
+      name: Integration instance
+      description: Required when multiple instances are loaded.
+      selector:
+        config_entry:
+          integration: hass_solar_orchestrator
     load_id:
       name: Load ID
       required: true
@@ -135,6 +165,12 @@ save_settings:
   name: Save settings
   description: Save tariff, contracted power, ICP margin, or advanced orchestrator settings.
   fields:
+    config_entry_id:
+      name: Integration instance
+      description: Required when multiple instances are loaded.
+      selector:
+        config_entry:
+          integration: hass_solar_orchestrator
     data:
       name: Settings object
       required: true
@@ -145,6 +181,12 @@ restore_defaults:
   name: Restore recommended defaults
   description: Restore recommended safe values for a configuration section.
   fields:
+    config_entry_id:
+      name: Integration instance
+      description: Required when multiple instances are loaded.
+      selector:
+        config_entry:
+          integration: hass_solar_orchestrator
     section:
       name: Section
       required: false
@@ -160,6 +202,12 @@ clear_quarantine:
   name: Clear load quarantine
   description: Re-enable a load after inspecting its W-return discrepancy.
   fields:
+    config_entry_id:
+      name: Integration instance
+      description: Required when multiple instances are loaded.
+      selector:
+        config_entry:
+          integration: hass_solar_orchestrator
     load_id:
       name: Load ID
       required: true
@@ -174,6 +222,12 @@ set_load_mode:
   name: Set granular load mode
   description: Switch a single load between observing and active (blocked if HA automation conflict exists).
   fields:
+    config_entry_id:
+      name: Integration instance
+      description: Required when multiple instances are loaded.
+      selector:
+        config_entry:
+          integration: hass_solar_orchestrator
     load_id:
       name: Load ID
       required: true
@@ -195,7 +249,21 @@ set_load_mode:
 extra_shower_today:
   name: Extra shower today
   description: Boost hot water priority until local midnight.
+  fields:
+    config_entry_id:
+      name: Integration instance
+      description: Required when multiple instances are loaded.
+      selector:
+        config_entry:
+          integration: hass_solar_orchestrator
 
 mute_ev_nag_today:
   name: Mute BYD unplugged alert today
   description: Silence the unplugged EV solar surplus reminder until local midnight.
+  fields:
+    config_entry_id:
+      name: Integration instance
+      description: Required when multiple instances are loaded.
+      selector:
+        config_entry:
+          integration: hass_solar_orchestrator

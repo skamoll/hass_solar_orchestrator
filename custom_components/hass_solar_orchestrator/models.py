@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, tzinfo
 
 from .const import (
     DEFAULT_AUX_SHED_HOLD_SECONDS,
@@ -52,6 +53,48 @@ from .const import (
     TelemetrySource,
 )
 
+CONF_POOL_SEASON_ENABLED = "pool_season_enabled"
+CONF_POOL_SEASON_START = "pool_season_start"
+CONF_POOL_SEASON_END = "pool_season_end"
+DEFAULT_POOL_SEASON_ENABLED = False
+DEFAULT_POOL_SEASON_START = "05-01"
+DEFAULT_POOL_SEASON_END = "09-30"
+_MONTH_DAY_RE = re.compile(r"^(\d{2})-(\d{2})$")
+
+
+def parse_month_day(value: object) -> tuple[int, int] | None:
+    """Parse a strict MM-DD calendar string (allowing 02-29), or return None."""
+    if not isinstance(value, str):
+        return None
+    match = _MONTH_DAY_RE.fullmatch(value.strip())
+    if not match:
+        return None
+    month, day = int(match.group(1)), int(match.group(2))
+    try:
+        date(2024, month, day)
+    except ValueError:
+        return None
+    return (month, day)
+
+
+def is_valid_month_day(value: object) -> bool:
+    """Return True if value is a valid MM-DD string."""
+    return parse_month_day(value) is not None
+
+
+def is_pool_in_season(now_local: datetime, config: OrchestratorConfig) -> bool:
+    """Return True if the pool season is disabled (always in season) or now_local is in window."""
+    if not config.pool_season_enabled:
+        return True
+    start = parse_month_day(config.pool_season_start)
+    end = parse_month_day(config.pool_season_end)
+    if start is None or end is None:
+        return True
+    cur = (now_local.month, now_local.day)
+    if start <= end:
+        return start <= cur <= end
+    return cur >= start or cur <= end
+
 
 @dataclass(frozen=True, slots=True)
 class EnergySnapshot:
@@ -96,6 +139,12 @@ class EnergySnapshot:
     tariff_price_eur: float | None = None
     tariff_period: str | None = None
     critical_sensor_invalid: bool = False
+    calendar_timezone: tzinfo | None = None
+
+    @property
+    def calendar_time(self) -> datetime:
+        """Local civil time for daily quotas and tariffs; timers use the sample instant."""
+        return self.now.astimezone(self.calendar_timezone) if self.calendar_timezone else self.now
 
 
 @dataclass(slots=True)
@@ -105,11 +154,14 @@ class OrchestratorConfig:
     mode: OperatingMode = OperatingMode.OBSERVING
     profile: ProfileName = ProfileName.COMFORT
     stale_timeout_seconds: int = DEFAULT_STALE_TIMEOUT_SECONDS
+    ev_stale_hold_seconds: int = 60
     house_soc_floor: float = DEFAULT_HOUSE_SOC_FLOOR
     ev_target_soc: float = DEFAULT_EV_TARGET_SOC
     ev_min_amps: int = DEFAULT_EV_MIN_AMPS
     ev_max_amps: int = DEFAULT_EV_MAX_AMPS
     ev_start_amps: int = DEFAULT_EV_START_AMPS
+    ev_max_start_amps: int = 8
+    ev_max_step_up_amps: int = 2
     nominal_voltage_v: float = DEFAULT_NOMINAL_VOLTAGE
     step_up_margin_w: float = DEFAULT_STEP_UP_MARGIN_W
     step_up_hold_seconds: int = DEFAULT_STEP_UP_HOLD_SECONDS
@@ -133,17 +185,23 @@ class OrchestratorConfig:
     pool_min_off_seconds: int = DEFAULT_POOL_MIN_OFF_SECONDS
     pool_daily_max_minutes: int = DEFAULT_POOL_DAILY_MAX_MINUTES
     pool_cooldown_minutes: int = DEFAULT_POOL_COOLDOWN_MINUTES
+    pool_season_enabled: bool = DEFAULT_POOL_SEASON_ENABLED
+    pool_season_start: str = DEFAULT_POOL_SEASON_START
+    pool_season_end: str = DEFAULT_POOL_SEASON_END
 
     import_shed_threshold_w: float = DEFAULT_IMPORT_SHED_THRESHOLD_W
     emergency_import_w: float = DEFAULT_EMERGENCY_IMPORT_W
     aux_shed_hold_seconds: int = DEFAULT_AUX_SHED_HOLD_SECONDS
     battery_slack_w: float = DEFAULT_BATTERY_SLACK_W
+    battery_slack_soc_margin: float = 5.0
     battery_discharge_shed_w: float = DEFAULT_BATTERY_DISCHARGE_SHED_W
 
     contracted_power_w: float = DEFAULT_CONTRACTED_POWER_W
     icp_margin_w: float = DEFAULT_ICP_MARGIN_W
+    icp_warning_ratio_pct: float = 80.0
     boot_grace_seconds: int = DEFAULT_BOOT_GRACE_SECONDS
     settling_lock_seconds: int = DEFAULT_SETTLING_LOCK_SECONDS
+    safe_hold_seconds: int = 60
 
     priority_order: tuple[str, ...] = DEFAULT_PRIORITY_ORDER
     protected_loads: tuple[str, ...] = ()
@@ -172,9 +230,19 @@ class OrchestratorConfig:
     quiet_hours_start: str = "23:00"
     quiet_hours_end: str = "07:00"
     extra_shower_until: datetime | None = None
+    extra_shower_temp_boost_c: float = 5.0
     ev_nag_muted_until: datetime | None = None
     shower_pattern_enabled: bool = True
     load_modes: dict[str, str] | None = None
+    washer_min_surplus_w: float = 1500.0
+    washer_min_headroom_w: float = 1800.0
+    byd_unplugged_hold_seconds: int = 600
+    byd_unplugged_min_surplus_w: float = 1400.0
+    byd_unplugged_max_soc: float = 85.0
+    climate_advice_on_surplus_w: float = 800.0
+    climate_advice_off_surplus_w: float = 500.0
+    climate_advice_hot_temp_c: float = 26.0
+    climate_advice_cold_temp_c: float = 15.0
 
 
 @dataclass(slots=True)
@@ -199,12 +267,15 @@ class OrchestratorState:
     heater_export_since: datetime | None = None
     pool_export_since: datetime | None = None
     aux_shed_since: datetime | None = None
+    heater_shed_since: datetime | None = None
 
     handoff_waiting_for_off: str | None = None
     handoff_off_confirmed_at: datetime | None = None
+    handoff_preempt_winner: str | None = None
 
     started_at: datetime | None = None
     degraded_since: datetime | None = None
+    ev_stale_since: datetime | None = None
     settling_until: datetime | None = None
     virtual_reserved_w: float = 0.0
 
@@ -352,3 +423,4 @@ class DispatchPlan:
     cloud_pocket_used_kwh_today: float = 0.0
     cloud_pocket_episode_kwh: float = 0.0
     load_modes: dict[str, str] = field(default_factory=dict)
+    pool_in_season: bool = True

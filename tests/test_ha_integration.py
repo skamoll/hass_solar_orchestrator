@@ -11,8 +11,10 @@ if importlib.util.find_spec("homeassistant") is None:
     pytest.skip("homeassistant package not installed", allow_module_level=True)
 
 from homeassistant import bootstrap, loader
+from homeassistant.components import frontend
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.hass_solar_orchestrator.const import (
@@ -78,7 +80,17 @@ async def test_ha_setup_entities_mode_switch_and_unload(tmp_path: Path) -> None:
         assert entry.state is ConfigEntryState.LOADED
         ent_reg = er.async_get(hass)
         entities = er.async_entries_for_config_entry(ent_reg, entry.entry_id)
-        assert len(entities) == 19
+        registered = {entity.unique_id.removeprefix(f"{entry.entry_id}_") for entity in entities}
+        assert {
+            "decision_summary",
+            "operating_mode",
+            "degraded",
+            "ev_max_amps",
+            "heater_enabled",
+            "grid_import_cost_today",
+            "grid_export_revenue_today",
+            "net_cost_today",
+        } <= registered
 
         surplus = hass.states.get("sensor.solar_excess_orchestrator_usable_solar_surplus")
         assert surplus is not None
@@ -102,8 +114,25 @@ async def test_ha_setup_entities_mode_switch_and_unload(tmp_path: Path) -> None:
             == OperatingMode.AUTO_SOLAR.value
         )
 
+        with pytest.raises(ServiceValidationError, match="not loaded"):
+            await hass.services.async_call(
+                DOMAIN, "set_mode", {"config_entry_id": "unknown", "mode": "paused"}, blocking=True
+            )
+        await hass.services.async_call(
+            DOMAIN,
+            "set_mode",
+            {"config_entry_id": entry.entry_id, "mode": "observing"},
+            blocking=True,
+        )
+        assert hass.data[DOMAIN][entry.entry_id].config.mode is OperatingMode.OBSERVING
+        assert frontend.async_panel_exists(hass, "solar-orchestrator")
         assert await hass.config_entries.async_unload(entry.entry_id)
         await hass.async_block_till_done()
         assert entry.state is ConfigEntryState.NOT_LOADED
+        assert not hass.services.has_service(DOMAIN, "set_mode")
+        assert not frontend.async_panel_exists(hass, "solar-orchestrator")
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        assert frontend.async_panel_exists(hass, "solar-orchestrator")
+        assert hass.services.has_service(DOMAIN, "set_mode")
     finally:
         await hass.async_stop()

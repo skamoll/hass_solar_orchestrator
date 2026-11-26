@@ -26,7 +26,14 @@
           "heater_temp_entity": "Sensor de temperatura del termo (°C)",
           "heater_power_entity": "Sensor de potencia medida del termo (W)",
           "pool_switch_entity": "Interruptor de la depuradora",
-          "pool_power_entity": "Sensor de potencia medida de la depuradora (W)"
+          "pool_power_entity": "Sensor de potencia medida de la depuradora (W)",
+          "tariff_price_entity": "Precio de compra actual (EUR/kWh)",
+          "solar_forecast_entity": "Previsión solar de mañana (kWh)",
+          "heater_flow_entity": "Caudal de agua caliente (L/min)",
+          "heater_daily_water_entity": "Consumo diario de agua caliente (L)",
+          "ev_tracker_entity": "Ubicación del vehículo",
+          "weather_entity": "Previsión meteorológica diaria",
+          "climate_entity": "Climatización interior"
         }
       },
       "reconfigure": {
@@ -54,7 +61,14 @@
           "heater_temp_entity": "Sensor de temperatura del termo (°C)",
           "heater_power_entity": "Sensor de potencia medida del termo (W)",
           "pool_switch_entity": "Interruptor de la depuradora",
-          "pool_power_entity": "Sensor de potencia medida de la depuradora (W)"
+          "pool_power_entity": "Sensor de potencia medida de la depuradora (W)",
+          "tariff_price_entity": "Precio de compra actual (EUR/kWh)",
+          "solar_forecast_entity": "Previsión solar de mañana (kWh)",
+          "heater_flow_entity": "Caudal de agua caliente (L/min)",
+          "heater_daily_water_entity": "Consumo diario de agua caliente (L)",
+          "ev_tracker_entity": "Ubicación del vehículo",
+          "weather_entity": "Previsión meteorológica diaria",
+          "climate_entity": "Climatización interior"
         }
       }
     },
@@ -71,9 +85,15 @@
           "stale_timeout_seconds": "Timeout de telemetría local (segundos)",
           "heater_start_export_w": "Umbral de vertido para arrancar termo (W)",
           "pool_start_export_w": "Umbral de vertido para arrancar depuradora (W)",
-          "import_shed_threshold_w": "Umbral de importación para reducir carga VE (W)"
+          "import_shed_threshold_w": "Umbral de importación para reducir carga VE (W)",
+          "pool_season_enabled": "Limitar depuradora por temporada",
+          "pool_season_start": "Inicio de temporada (MM-DD)",
+          "pool_season_end": "Fin de temporada (MM-DD)"
         }
       }
+    },
+    "error": {
+      "invalid_month_day": "Usa el formato MM-DD con una fecha válida (p. ej. 05-01)."
     }
   },
   "issues": {
