@@ -327,8 +327,18 @@ def _update_savings(
     snapshot: EnergySnapshot,
     config: OrchestratorConfig,
     state: OrchestratorState,
-) -> tuple[float | None, float | None, str]:
-    """Accumulate honest estimated savings when tariff is configured."""
+) -> tuple[
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    str,
+]:
+    """Accumulate estimated savings, grid import cost, export revenue, and net cost."""
     price_eur = _effective_tariff_price(snapshot, config)
     formula = (
         "Ahorro = (Autoconsumo_kWh * Tarifa_Red) + "
@@ -339,29 +349,59 @@ def _update_savings(
     if state.savings_last_day != day_key:
         state.savings_last_day = day_key
         state.savings_today_eur = 0.0
+        state.grid_import_cost_today_eur = 0.0
+        state.grid_export_revenue_today_eur = 0.0
     if state.savings_last_month != month_key:
         state.savings_last_month = month_key
         state.savings_month_eur = 0.0
+        state.grid_import_cost_month_eur = 0.0
+        state.grid_export_revenue_month_eur = 0.0
 
     if price_eur is None:
         state.savings_last_tick = snapshot.now
-        return None, None, formula
+        return None, None, None, None, None, None, None, None, formula
 
-    if (
-        state.savings_last_tick is not None
-        and snapshot.solar_power_w is not None
-        and snapshot.grid_power_w is not None
-    ):
+    if state.savings_last_tick is not None and snapshot.grid_power_w is not None:
         dt_h = max(0.0, (snapshot.now - state.savings_last_tick).total_seconds() / 3600.0)
         if dt_h <= 0.25:
+            import_kw = max(0.0, snapshot.grid_power_w) / 1000.0
             export_kw = max(0.0, -snapshot.grid_power_w) / 1000.0
-            solar_kw = max(0.0, snapshot.solar_power_w) / 1000.0
-            self_consumed_kw = max(0.0, solar_kw - export_kw)
-            delta_eur = (self_consumed_kw * price_eur + export_kw * config.export_comp_eur) * dt_h
-            state.savings_today_eur = round(state.savings_today_eur + delta_eur, 4)
-            state.savings_month_eur = round(state.savings_month_eur + delta_eur, 4)
+            delta_import_eur = import_kw * price_eur * dt_h
+            delta_export_eur = export_kw * config.export_comp_eur * dt_h
+            state.grid_import_cost_today_eur = round(
+                state.grid_import_cost_today_eur + delta_import_eur, 4
+            )
+            state.grid_import_cost_month_eur = round(
+                state.grid_import_cost_month_eur + delta_import_eur, 4
+            )
+            state.grid_export_revenue_today_eur = round(
+                state.grid_export_revenue_today_eur + delta_export_eur, 4
+            )
+            state.grid_export_revenue_month_eur = round(
+                state.grid_export_revenue_month_eur + delta_export_eur, 4
+            )
+            if snapshot.solar_power_w is not None:
+                solar_kw = max(0.0, snapshot.solar_power_w) / 1000.0
+                self_consumed_kw = max(0.0, solar_kw - export_kw)
+                delta_eur = (
+                    self_consumed_kw * price_eur + export_kw * config.export_comp_eur
+                ) * dt_h
+                state.savings_today_eur = round(state.savings_today_eur + delta_eur, 4)
+                state.savings_month_eur = round(state.savings_month_eur + delta_eur, 4)
     state.savings_last_tick = snapshot.now
-    return round(state.savings_today_eur, 2), round(state.savings_month_eur, 2), formula
+    net_today = round(state.grid_import_cost_today_eur - state.grid_export_revenue_today_eur, 2)
+    net_month = round(state.grid_import_cost_month_eur - state.grid_export_revenue_month_eur, 2)
+    return (
+        round(state.savings_today_eur, 2),
+        round(state.savings_month_eur, 2),
+        round(state.grid_import_cost_today_eur, 2),
+        round(state.grid_import_cost_month_eur, 2),
+        round(state.grid_export_revenue_today_eur, 2),
+        round(state.grid_export_revenue_month_eur, 2),
+        net_today,
+        net_month,
+        formula,
+    )
 
 
 def _remaining_seconds(now: datetime, until: datetime | None) -> int:
@@ -1174,7 +1214,17 @@ def evaluate(
     else:
         traffic_light = GlobalTrafficLight.OPTIMAL
 
-    savings_today, savings_month, savings_formula = _update_savings(snapshot, config, state)
+    (
+        savings_today,
+        savings_month,
+        import_cost_today,
+        import_cost_month,
+        export_rev_today,
+        export_rev_month,
+        net_cost_today,
+        net_cost_month,
+        savings_formula,
+    ) = _update_savings(snapshot, config, state)
     battery_advice = _build_battery_advice(snapshot, config)
     ev_commitment = _compute_ev_commitment(snapshot, config)
 
@@ -1337,6 +1387,12 @@ def evaluate(
             alerts=tuple(alerts),
             estimated_savings_today_eur=savings_today,
             estimated_savings_month_eur=savings_month,
+            grid_import_cost_today_eur=import_cost_today,
+            grid_import_cost_month_eur=import_cost_month,
+            grid_export_revenue_today_eur=export_rev_today,
+            grid_export_revenue_month_eur=export_rev_month,
+            net_cost_today_eur=net_cost_today,
+            net_cost_month_eur=net_cost_month,
             savings_formula=savings_formula,
             freshness_by_source=freshness_by_source,
             heater_thermostat_idle=state.heater_thermostat_idle,

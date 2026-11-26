@@ -92,7 +92,10 @@
       "telemetry_source": { "name": "Telemetry source" },
       "traffic_light": { "name": "Traffic light status" },
       "icp_headroom": { "name": "ICP headroom" },
-      "estimated_savings_today": { "name": "Estimated savings today" }
+      "estimated_savings_today": { "name": "Estimated savings today" },
+      "grid_import_cost_today": { "name": "Grid import cost today" },
+      "grid_export_revenue_today": { "name": "Grid export revenue today" },
+      "net_cost_today": { "name": "Net energy cost today" }
     },
     "binary_sensor": {
       "degraded": { "name": "Degraded telemetry" },

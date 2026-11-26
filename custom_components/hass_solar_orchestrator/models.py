@@ -222,6 +222,10 @@ class OrchestratorState:
 
     savings_today_eur: float = 0.0
     savings_month_eur: float = 0.0
+    grid_import_cost_today_eur: float = 0.0
+    grid_import_cost_month_eur: float = 0.0
+    grid_export_revenue_today_eur: float = 0.0
+    grid_export_revenue_month_eur: float = 0.0
     savings_last_tick: datetime | None = None
     savings_last_day: str | None = None
     savings_last_month: str | None = None
@@ -330,6 +334,12 @@ class DispatchPlan:
     alerts: tuple[AlertItem, ...] = field(default_factory=tuple)
     estimated_savings_today_eur: float | None = None
     estimated_savings_month_eur: float | None = None
+    grid_import_cost_today_eur: float | None = None
+    grid_import_cost_month_eur: float | None = None
+    grid_export_revenue_today_eur: float | None = None
+    grid_export_revenue_month_eur: float | None = None
+    net_cost_today_eur: float | None = None
+    net_cost_month_eur: float | None = None
     savings_formula: str = ""
     freshness_by_source: dict[str, int | None] = field(default_factory=dict)
     heater_thermostat_idle: bool = False

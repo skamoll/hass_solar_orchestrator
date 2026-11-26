@@ -263,3 +263,55 @@ def test_heater_respects_manual_override_and_measured_power() -> None:
     plan, _ = evaluate(snap, cfg, state)
     assert not any(a.target == "heater" and a.action == "turn_off" for a in plan.actions)
     assert "(0 W)" in plan.decision_summary
+
+
+def test_grid_import_cost_export_revenue_and_net_cost() -> None:
+    """Grid import cost, export revenue, and net cost integrate cleanly and reset daily."""
+    cfg = OrchestratorConfig(
+        mode=OperatingMode.OBSERVING,
+        tariff_mode="manual_20td",
+        tariff_p1_eur=0.20,
+        tariff_p2_eur=0.15,
+        tariff_p3_eur=0.10,
+        export_comp_eur=0.08,
+    )
+    # _ts(0) is 2026-11-23 12:00:00 (Monday, P1)
+    state = OrchestratorState(
+        savings_last_tick=_ts(0), savings_last_day="2026-11-23", savings_last_month="2026-11"
+    )
+    snap_import = _base_snapshot(600, grid_power_w=2000.0, solar_power_w=0.0)
+    plan1, state = evaluate(snap_import, cfg, state)
+    # 2 kW * 1/6 h * 0.20 EUR/kWh = 0.0667 EUR
+    assert plan1.grid_import_cost_today_eur == 0.07
+    assert plan1.grid_export_revenue_today_eur == 0.0
+    assert plan1.net_cost_today_eur == 0.07
+
+    snap_export = _base_snapshot(1200, grid_power_w=-3000.0, solar_power_w=3500.0)
+    plan2, state = evaluate(snap_export, cfg, state)
+    # + 3 kW * 1/6 h * 0.08 EUR/kWh = 0.04 EUR
+    assert plan2.grid_import_cost_today_eur == 0.07
+    assert plan2.grid_export_revenue_today_eur == 0.04
+    assert plan2.net_cost_today_eur == 0.03
+    assert plan2.net_cost_month_eur == 0.03
+
+    next_day = _ts(0) + timedelta(days=1)
+    snap_next = _base_snapshot(0, now=next_day, local_sample_time=next_day, grid_power_w=0.0)
+    plan_next, _ = evaluate(snap_next, cfg, state)
+    assert plan_next.grid_import_cost_today_eur == 0.0
+    assert plan_next.grid_export_revenue_today_eur == 0.0
+    assert plan_next.net_cost_today_eur == 0.0
+    assert plan_next.grid_import_cost_month_eur == 0.07
+    assert plan_next.grid_export_revenue_month_eur == 0.04
+
+
+def test_grid_costs_none_in_conservative_tariff_mode() -> None:
+    """Conservative tariff mode omits monetary figures instead of inventing them."""
+    cfg = OrchestratorConfig(mode=OperatingMode.OBSERVING, tariff_mode="conservative")
+    state = OrchestratorState(
+        savings_last_tick=_ts(0), savings_last_day="2026-11-23", savings_last_month="2026-11"
+    )
+    snap = _base_snapshot(60, grid_power_w=1500.0)
+    plan, _ = evaluate(snap, cfg, state)
+    assert plan.grid_import_cost_today_eur is None
+    assert plan.grid_export_revenue_today_eur is None
+    assert plan.net_cost_today_eur is None

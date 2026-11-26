@@ -159,6 +159,7 @@ class SolarOrchestratorPanel extends HTMLElement {
         .flow-svg { width: 100%; max-height: 190px; display: block; margin-bottom: 10px; }
         .flow-line { stroke: var(--primary-color, #03a9f4); stroke-width: 3; fill: none; stroke-dasharray: 6 6; animation: flowdash 1.2s linear infinite; }
         .flow-line.idle { stroke: rgba(128,128,128,0.3); stroke-dasharray: none; animation: none; }
+        .flow-line.rev { animation-direction: reverse; }
         @keyframes flowdash { to { stroke-dashoffset: -24; } }
         @media (prefers-reduced-motion: reduce) { .flow-line { animation: none; stroke-dasharray: none; } }
         .flow-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 10px; }
@@ -305,6 +306,13 @@ class SolarOrchestratorPanel extends HTMLElement {
             <div class="row">
               <div class="muted">Ahorro hoy / mes: <strong id="val-savings">—</strong></div>
               <div class="muted">Nubes hoy: <span id="val-cloud-pocket">0.00</span> / 0.50 kWh</div>
+            </div>
+            <div class="row" style="margin-top:6px">
+              <div class="muted">Compra red hoy / mes: <strong id="val-import-cost">—</strong></div>
+              <div class="muted">Vertido hoy / mes: <strong id="val-export-rev">—</strong></div>
+            </div>
+            <div class="row" style="margin-top:4px">
+              <div class="muted">Coste neto hoy / mes: <strong id="val-net-cost">—</strong></div>
             </div>
           </div>
 
@@ -629,7 +637,11 @@ class SolarOrchestratorPanel extends HTMLElement {
 
     q("svg-l-solar").classList.toggle("idle", !(s.solar_w > 50));
     q("svg-l-bat").classList.toggle("idle", !(Math.abs(s.battery_w || 0) > 50));
+    // Path runs Bat→Casa (discharge, battery_w > 0); charging (battery_w < 0) flows Casa→Bat.
+    q("svg-l-bat").classList.toggle("rev", (s.battery_w || 0) < 0);
     q("svg-l-grid").classList.toggle("idle", !(Math.abs(s.grid_w || 0) > 50));
+    // Path runs Casa→Red (export, grid_w < 0); importing (grid_w > 0) flows Red→Casa.
+    q("svg-l-grid").classList.toggle("rev", (s.grid_w || 0) > 0);
     q("svg-l-ev").classList.toggle("idle", !(s.ev_power_w > 50));
     q("svg-l-heater").classList.toggle("idle", !(s.heater_power_w > 50));
 
@@ -651,8 +663,14 @@ class SolarOrchestratorPanel extends HTMLElement {
     const poolPct = Math.min(100, ((s.pool_minutes_today || 0) / Math.max(1, s.pool_daily_max_minutes || 360)) * 100);
     q("pool-bar").style.width = `${poolPct}%`;
 
-    const savTxt = p.estimated_savings_today_eur !== null && p.estimated_savings_today_eur !== undefined ? `${p.estimated_savings_today_eur.toFixed(2)} € / ${Number(p.estimated_savings_month_eur || 0).toFixed(2)} €` : "Sin tarifa";
-    setTxt("val-savings", savTxt);
+    const fmtEurPair = (today, month) =>
+      today !== null && today !== undefined
+        ? `${Number(today).toFixed(2)} € / ${Number(month || 0).toFixed(2)} €`
+        : "Sin tarifa";
+    setTxt("val-savings", fmtEurPair(p.estimated_savings_today_eur, p.estimated_savings_month_eur));
+    setTxt("val-import-cost", fmtEurPair(p.grid_import_cost_today_eur, p.grid_import_cost_month_eur));
+    setTxt("val-export-rev", fmtEurPair(p.grid_export_revenue_today_eur, p.grid_export_revenue_month_eur));
+    setTxt("val-net-cost", fmtEurPair(p.net_cost_today_eur, p.net_cost_month_eur));
     setTxt("val-cloud-pocket", Number(p.cloud_pocket_used_kwh_today || 0).toFixed(2));
     setTxt("val-sem-tmw", s.solar_forecast_tomorrow_kwh ?? "—");
     setTxt("bb-count", (d.blackbox || []).length);

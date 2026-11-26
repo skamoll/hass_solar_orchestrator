@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hass-solar-orchestrator"
-version = "0.1.0"
+version = "0.3.2"
 description = "Unified solar excess orchestrator for Home Assistant (PV inverter, battery, EV charger, and auxiliary loads)"
 readme = "README.md"
 requires-python = ">=3.12"
