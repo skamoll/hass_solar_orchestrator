@@ -1,13 +1,21 @@
 {
   "domain": "hass_solar_orchestrator",
   "name": "Solar Excess Orchestrator",
-  "categories": ["energy"],
-  "codeowners": ["@skamoll"],
+  "categories": [
+    "energy"
+  ],
+  "codeowners": [
+    "@skamoll"
+  ],
   "config_flow": true,
-  "dependencies": ["http", "panel_custom", "frontend"],
+  "dependencies": [
+    "http",
+    "panel_custom",
+    "frontend"
+  ],
   "documentation": "https://github.com/skamoll/hass_solar_orchestrator",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/skamoll/hass_solar_orchestrator/issues",
   "requirements": [],
-  "version": "0.3.2"
+  "version": "0.3.3"
 }
